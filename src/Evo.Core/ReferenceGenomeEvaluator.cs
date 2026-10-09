@@ -15,8 +15,14 @@ public sealed class ReferenceGenomeEvaluator<T> : IGenomeEvaluator<T>
     private readonly IFunctionSet<T> _functions;
     private readonly ReferenceExecutionCounters? _counters;
 
-    /// <summary>Creates a reference evaluator bound to a function set, optionally with execution counters.</summary>
-    public ReferenceGenomeEvaluator(IFunctionSet<T> functions, ReferenceExecutionCounters? counters = null)
+    /// <summary>Creates a reference evaluator bound to a function set.</summary>
+    public ReferenceGenomeEvaluator(IFunctionSet<T> functions)
+        : this(functions, null)
+    {
+    }
+
+    /// <summary>Creates a reference evaluator with opt-in execution counters (internal diagnostics for tests and benchmarks).</summary>
+    internal ReferenceGenomeEvaluator(IFunctionSet<T> functions, ReferenceExecutionCounters? counters)
     {
         ArgumentNullException.ThrowIfNull(functions);
         _functions = functions;

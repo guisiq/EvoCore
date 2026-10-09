@@ -4,7 +4,7 @@ namespace Evo.Core;
 /// Opt-in execution counter of the reference evaluator, indexed by node index.
 /// Pass no counters in timing runs (the default is <c>null</c>). Not thread-safe: use one instance per evaluating thread.
 /// </summary>
-public sealed class ReferenceExecutionCounters
+internal sealed class ReferenceExecutionCounters
 {
     /// <summary>Executions per node: one per active node per call; inactive nodes stay at zero.</summary>
     public int[] NodeExecutions { get; private set; } = [];
