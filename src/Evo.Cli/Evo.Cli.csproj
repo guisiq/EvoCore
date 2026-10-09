@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Evo.Cli</RootNamespace>
+    <AssemblyName>Evo.Cli</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Evo.Core\Evo.Core.csproj" />
+  </ItemGroup>
+
+</Project>

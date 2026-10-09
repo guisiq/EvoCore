@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Evo.Examples</RootNamespace>
+    <AssemblyName>Evo.Examples</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Evo.Core\Evo.Core.csproj" />
+  </ItemGroup>
+
+</Project>
