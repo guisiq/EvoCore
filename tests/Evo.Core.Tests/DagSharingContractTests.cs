@@ -7,7 +7,7 @@ namespace Evo.Core.Tests;
 // Fixtures: DoubleFunctionSet ids 0=Add(2), 1=Negate(1), 2=Constant(0).
 // Expectations are computed by hand (see evidence/002a-dag-sharing-contract/implementation.md)
 // and are independent of Genome<T>.Analyze. Addresses: inputs [0, InputCount), node n = InputCount + n.
-public sealed class DagSharingContractTests
+public sealed partial class DagSharingContractTests
 {
     private const int Add = 0;
     private const int Negate = 1;
@@ -127,7 +127,7 @@ public sealed class DagSharingContractTests
     [InlineData(new[] { 4 }, "future")]
     [InlineData(new[] { 99 }, "out of range")]
     [InlineData(new[] { -1 }, "negative")]
-    public void Invalid_connection_addresses_fail_with_identifiable_error(int[] connection, string label)
+    public void Invalid_connection_addresses_fail_for_single_node_shape(int[] connection, string label)
     {
         // Single Negate node n0 (address 1). Address 1 is self, 2+ is future, 99 out of range, -1 negative.
         var shape = new GenomeShape(InputCount: 1, NodeCount: 1, OutputCount: 1, MaxArity: 1, LevelsBack: 1);
