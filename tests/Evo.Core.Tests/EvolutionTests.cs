@@ -68,6 +68,30 @@ internal sealed class QuadraticFitness : IFitnessEvaluator<double>
     }
 }
 
+/// <summary>Conta avaliações por fingerprint fenotípica; delega o fitness a <see cref="QuadraticFitness"/>.</summary>
+internal sealed class CountingFitness : IFitnessEvaluator<double>
+{
+    private readonly QuadraticFitness _inner = new();
+    private readonly Dictionary<string, int> _counts;
+    private readonly object _lock = new();
+
+    public CountingFitness(Dictionary<string, int> counts)
+    {
+        _counts = counts;
+    }
+
+    public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
+    {
+        var key = Convert.ToHexString(genome.ComputePhenotypeFingerprint(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance));
+        lock (_lock)
+        {
+            _counts[key] = _counts.GetValueOrDefault(key) + 1;
+        }
+
+        return _inner.Evaluate(genome, evaluator, cancellationToken);
+    }
+}
+
 public sealed class EvolutionOperatorTests
 {
     private static readonly GenomeShape Shape = new(1, 8, 1, 2, 3);
@@ -220,6 +244,41 @@ public sealed class EvolutionOperatorTests
     }
 
     [Fact]
+    public void Operator_same_seed_reproduces_population_and_offspring()
+    {
+        var problem = DoubleProblem();
+        var operators = new EvolutionOperators<double>(problem);
+        var first = InitialPopulation(operators, 20, 7);
+        var second = InitialPopulation(operators, 20, 7);
+        var other = InitialPopulation(operators, 20, 8);
+
+        for (var i = 0; i < first.Length; i++)
+        {
+            Assert.Equal(first[i].FunctionGenes.ToArray(), second[i].FunctionGenes.ToArray());
+            Assert.Equal(
+                first[i].ComputePhenotypeFingerprint(problem.Functions, problem.Values),
+                second[i].ComputePhenotypeFingerprint(problem.Functions, problem.Values));
+        }
+
+        Assert.Contains(Enumerable.Range(0, first.Length), i =>
+            !first[i].FunctionGenes.ToArray().SequenceEqual(other[i].FunctionGenes.ToArray()));
+
+        var fitness = Enumerable.Range(0, 20).Select(i => FitnessResult.Valid(i)).ToArray();
+        var options = new EvolutionOptions { TournamentSize = 3, Seed = 42 };
+        for (var k = 0; k < 200; k++)
+        {
+            var rngA = RandomStream.Create(42, 1, (ulong)k, 2);
+            var rngB = RandomStream.Create(42, 1, (ulong)k, 2);
+            var childA = operators.Breed(first, fitness, options, ref rngA);
+            var childB = operators.Breed(second, fitness, options, ref rngB);
+            Assert.Equal(childA.FunctionGenes.ToArray(), childB.FunctionGenes.ToArray());
+            Assert.Equal(
+                childA.ComputePhenotypeFingerprint(problem.Functions, problem.Values),
+                childB.ComputePhenotypeFingerprint(problem.Functions, problem.Values));
+        }
+    }
+
+    [Fact]
     public void Operator_array_values_are_deep_cloned()
     {
         var problem = new EvolutionTestProblem<double[]>(
@@ -357,6 +416,111 @@ public sealed class EvolutionEngineTests
 
         // Elites keep the same phenotype across generations, so their fitness must come from the cache.
         Assert.True(evaluations < options.PopulationSize * (options.MaxGenerations + 1));
+    }
+
+    private static EvolutionTestProblem<double> CountingProblem(Dictionary<string, int> counts) => new(
+        Shape,
+        StandardDoubleFunctionSet.Instance,
+        DoubleValueSemantics.Instance,
+        DoubleParameterStrategy.Instance,
+        () => new CountingFitness(counts));
+
+    private static void AssertWorkerEquivalence(EvolutionOptions baseOptions, TerminationReason expected)
+    {
+        var sequences = new List<List<EvolutionProgress>>();
+        var results = new List<EvolutionResult<double>>();
+        foreach (var workers in new[] { 1, 2, 4, 8 })
+        {
+            var reports = new List<EvolutionProgress>();
+            results.Add(new EvolutionEngine<double>(reports.Add).Run(Problem(), baseOptions with { WorkerCount = workers }));
+            sequences.Add(reports);
+        }
+
+        Assert.Equal(expected, results[0].Termination);
+        for (var i = 1; i < results.Count; i++)
+        {
+            Assert.Equal(sequences[0], sequences[i]);
+            Assert.Equal(results[0].BestFitness, results[i].BestFitness);
+            Assert.Equal(results[0].GenerationsRun, results[i].GenerationsRun);
+            Assert.Equal(results[0].Termination, results[i].Termination);
+        }
+    }
+
+    [Fact]
+    public void Evolution_elites_are_copied_unchanged()
+    {
+        // Com EliteCount == PopulationSize, a geração g+1 é só clone da g: nenhum cruzamento ou mutação.
+        var counts0 = new Dictionary<string, int>();
+        var options0 = Options(1) with { PopulationSize = 10, EliteCount = 10, MaxGenerations = 0 };
+        var first = new EvolutionEngine<double>().Run(CountingProblem(counts0), options0);
+
+        var counts1 = new Dictionary<string, int>();
+        var second = new EvolutionEngine<double>().Run(CountingProblem(counts1), options0 with { MaxGenerations = 1 });
+
+        Assert.Equal(counts0.Values.Sum(), counts1.Values.Sum());
+        Assert.Equal(first.BestFitness, second.BestFitness);
+        Assert.Equal(first.BestGenome.FunctionGenes.ToArray(), second.BestGenome.FunctionGenes.ToArray());
+        Assert.Equal(
+            first.BestGenome.ComputePhenotypeFingerprint(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance),
+            second.BestGenome.ComputePhenotypeFingerprint(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance));
+    }
+
+    [Fact]
+    public void Evolution_stagnation_is_worker_count_equivalent()
+    {
+        AssertWorkerEquivalence(Options(1) with { MaxGenerations = 1000, StagnationGenerations = 3 }, TerminationReason.Stagnation);
+    }
+
+    [Fact]
+    public void Evolution_target_fitness_is_worker_count_equivalent()
+    {
+        var reports = new List<EvolutionProgress>();
+        new EvolutionEngine<double>(reports.Add).Run(Problem(), Options(1) with { MaxGenerations = 15 });
+        var target = reports[0].BestFitness.Value;
+
+        AssertWorkerEquivalence(
+            Options(1) with { MaxGenerations = 1000, TargetFitness = target },
+            TerminationReason.TargetFitness);
+    }
+
+    [Fact]
+    public void Evolution_cache_reuses_only_matching_fingerprint()
+    {
+        var problem = Problem();
+        var operators = new EvolutionOperators<double>(problem);
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < 30; i++)
+        {
+            var rng = RandomStream.Create(42, 0, (ulong)i, 1);
+            var genome = operators.CreateInitial(ref rng);
+            distinct.Add(Convert.ToHexString(genome.ComputePhenotypeFingerprint(problem.Functions, problem.Values)));
+        }
+
+        // Geração 0: indivíduos com a mesma fingerprint são avaliados uma única vez; cada fingerprint distinta é avaliada.
+        var counts0 = new Dictionary<string, int>();
+        new EvolutionEngine<double>().Run(CountingProblem(counts0), Options(2) with { MaxGenerations = 0 });
+        Assert.Equal(distinct.Count, counts0.Count);
+        Assert.All(counts0.Values, c => Assert.Equal(1, c));
+        Assert.Equal(distinct.OrderBy(k => k, StringComparer.Ordinal), counts0.Keys.OrderBy(k => k, StringComparer.Ordinal));
+
+        // Execução completa: o cache deve reduzir avaliações e manter todas as fingerprints avaliadas.
+        var counts = new Dictionary<string, int>();
+        var options = Options(2);
+        new EvolutionEngine<double>().Run(CountingProblem(counts), options);
+        Assert.True(counts.Values.Sum() < options.PopulationSize * (options.MaxGenerations + 1));
+        Assert.True(counts.Keys.Count >= distinct.Count);
+    }
+
+    [Fact]
+    public void Evolution_time_limit_returns_consistent_result()
+    {
+        var reports = new List<EvolutionProgress>();
+        var result = new EvolutionEngine<double>(reports.Add).Run(Problem(), Options(2) with { TimeLimit = TimeSpan.Zero });
+
+        Assert.Equal(TerminationReason.TimeLimit, result.Termination);
+        Assert.True(result.BestFitness.IsValid);
+        Assert.Equal(reports[^1].BestFitness, result.BestFitness);
+        Assert.Equal(reports[^1].Generation, result.GenerationsRun);
     }
 
     [Fact]
