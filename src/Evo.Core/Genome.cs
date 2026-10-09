@@ -20,7 +20,7 @@ public sealed class InvalidGenomeException : Exception
 /// Active graph metadata of a genome for one function set (02-dag-e-evolucao.md section 3).
 /// </summary>
 /// <param name="ActiveNodeCount">Number of distinct active nodes (each address counted once).</param>
-/// <param name="ActiveDepth">Longest path, in node levels, from an input to an output.</param>
+/// <param name="ActiveDepth">Longest path, in edges, from an input or arity-zero node to an output.</param>
 /// <param name="UsedInputs">Ascending indices of the inputs reachable from the outputs.</param>
 /// <param name="ActiveNodes">Ascending node indices of the active closure (topological order).</param>
 public sealed record ActiveGraph(int ActiveNodeCount, int ActiveDepth, int[] UsedInputs, int[] ActiveNodes);
@@ -291,7 +291,8 @@ public sealed class Genome<T>
                 maxArg = Math.Max(maxArg, DepthOf(_connectionGenes[ConnectionIndex(node, slot)], depth, inputCount));
             }
 
-            depth[node] = maxArg + 1;
+            // Arity-zero nodes are depth-0 sources (02 §3.1); other nodes add one edge over their deepest argument.
+            depth[node] = arity[node] == 0 ? 0 : maxArg + 1;
         }
 
         var activeDepth = 0;
