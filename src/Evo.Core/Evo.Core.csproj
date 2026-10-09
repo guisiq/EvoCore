@@ -6,4 +6,8 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Evo.Core.Tests" />
+  </ItemGroup>
+
 </Project>
