@@ -16,6 +16,8 @@ public static class Program
     private const string ConfigFileName = "config.json";
     private const string CheckpointFileName = "checkpoint.json";
     private const string GenomeFileName = "best-genome.json";
+    private const string HistoryFileName = "history.csv";
+    private const string HistoryHeader = "generation,bestFitness,trainingMse,populationDigest\n";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -40,6 +42,12 @@ public static class Program
                 ("benchmark", "symbolic-regression-30") => RunBenchmark(args[2..]),
                 _ => Usage(),
             };
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException)
+        {
+            Console.Error.WriteLine($"argumento numérico inválido: {ex.Message}");
+            PrintUsage();
+            return 2;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException or InvalidGenomeException)
         {
@@ -88,7 +96,7 @@ public static class Program
         outDir ??= dir;
         Directory.CreateDirectory(outDir);
 
-        var result = Execute(problem, options, outDir, state);
+        var result = Execute(problem, options, outDir, state, Path.Combine(dir, HistoryFileName));
         Console.WriteLine($"artefatos: {Path.GetFullPath(outDir)}");
         Console.WriteLine($"termination={result.Termination} generations={result.GenerationsRun}");
         return 0;
@@ -150,11 +158,17 @@ public static class Program
         SymbolicRegressionProblem problem,
         EvolutionOptions options,
         string outDir,
-        EvolutionState<double>? resume)
+        EvolutionState<double>? resume,
+        string? priorHistoryPath = null)
     {
         File.WriteAllText(Path.Combine(outDir, ConfigFileName), JsonSerializer.Serialize(options, JsonOptions));
 
-        var history = new StringBuilder("generation,bestFitness,trainingMse,populationDigest\n");
+        var history = new StringBuilder(HistoryHeader);
+        if (resume is not null && priorHistoryPath is not null && File.Exists(priorHistoryPath))
+        {
+            AppendHistoryUpTo(history, priorHistoryPath, resume.Generation);
+        }
+
         var checkpointPath = Path.Combine(outDir, CheckpointFileName);
 
         var engine = new EvolutionEngine<double>(
@@ -169,9 +183,27 @@ public static class Program
             ? engine.Run(problem, options)
             : engine.Resume(problem, options, resume);
 
-        File.WriteAllText(Path.Combine(outDir, "history.csv"), history.ToString());
+        File.WriteAllText(Path.Combine(outDir, HistoryFileName), history.ToString());
         WriteBest(outDir, problem, result);
         return result;
+    }
+
+    /// <summary>Copia as linhas do histórico anterior estritamente anteriores à geração do checkpoint, que é reavaliada na retomada.</summary>
+    private static void AppendHistoryUpTo(StringBuilder history, string priorHistoryPath, int generation)
+    {
+        foreach (var line in File.ReadLines(priorHistoryPath).Skip(1))
+        {
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var comma = line.IndexOf(',');
+            if (int.Parse(line.AsSpan(0, comma), CultureInfo.InvariantCulture) < generation)
+            {
+                history.Append(line).Append('\n');
+            }
+        }
     }
 
     private static void WriteBest(string outDir, SymbolicRegressionProblem problem, EvolutionResult<double> result)
