@@ -38,6 +38,69 @@ public sealed class DagExecutionAuditTests
             functions);
     }
 
+    /// <summary>R1-1: the reference evaluator counts one execution per active node per call and zero for inactive nodes.</summary>
+    private static void AssertReferenceCounts<T>(
+        IFunctionSet<T> functions,
+        IValueSemantics<T> values,
+        int constantIndex,
+        T constant,
+        T[] cases,
+        Func<T, T> oracle)
+    {
+        var genome = BuildGenome(functions, values, constantIndex, constant);
+        var counters = new ReferenceExecutionCounters();
+        var evaluator = new ReferenceGenomeEvaluator<T>(functions, counters);
+        var outputs = new T[2];
+
+        foreach (var x in cases)
+        {
+            evaluator.Evaluate(genome, new[] { x }, outputs);
+            var expected = oracle(x);
+            Assert.True(values.ValueEquals(outputs[0], expected));
+            Assert.True(values.ValueEquals(outputs[1], expected));
+        }
+
+        Assert.Equal(new[] { cases.Length, cases.Length, 0 }, counters.NodeExecutions);
+    }
+
+    [Fact]
+    public void Reference_counts_one_execution_per_active_node_per_case_for_all_domains()
+    {
+        var doubles = new[] { 0.5, -1.25, 3.0 };
+        AssertReferenceCounts(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance, 13, 7.0, doubles, x => 4.0 * x);
+
+        var ints = new[] { 0, 3, -7 };
+        AssertReferenceCounts(StandardInt32FunctionSet.Instance, Int32ValueSemantics.Instance, 11, 7, ints, x => 4 * x);
+
+        var arrays = new[] { new[] { 1.0, -2.0 }, new[] { 0.5, 0.25 } };
+        AssertReferenceCounts(
+            StandardDoubleArrayFunctionSet.Instance,
+            DoubleArrayValueSemantics.Instance,
+            13,
+            new[] { 7.0 },
+            arrays,
+            x => x.Select(v => 4.0 * v).ToArray());
+
+        var intArrays = new[] { new[] { 1, -2 }, new[] { 5, 0 } };
+        AssertReferenceCounts(
+            StandardInt32ArrayFunctionSet.Instance,
+            Int32ArrayValueSemantics.Instance,
+            11,
+            new[] { 7 },
+            intArrays,
+            x => x.Select(v => 4 * v).ToArray());
+    }
+
+    [Fact]
+    public void Reference_without_counters_keeps_counters_disabled_and_outputs_equal()
+    {
+        var genome = BuildGenome(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance, 13, 7.0);
+        var outputs = new double[2];
+        new ReferenceGenomeEvaluator<double>(StandardDoubleFunctionSet.Instance).Evaluate(genome, new[] { 2.0 }, outputs);
+        Assert.Equal(8.0, outputs[0]);
+        Assert.Equal(8.0, outputs[1]);
+    }
+
     private static void AssertScalarCounts<T>(
         IFunctionSet<T> functions,
         IValueSemantics<T> values,

@@ -13,12 +13,14 @@ namespace Evo.Core;
 public sealed class ReferenceGenomeEvaluator<T> : IGenomeEvaluator<T>
 {
     private readonly IFunctionSet<T> _functions;
+    private readonly ReferenceExecutionCounters? _counters;
 
-    /// <summary>Creates a reference evaluator bound to a function set.</summary>
-    public ReferenceGenomeEvaluator(IFunctionSet<T> functions)
+    /// <summary>Creates a reference evaluator bound to a function set, optionally with execution counters.</summary>
+    public ReferenceGenomeEvaluator(IFunctionSet<T> functions, ReferenceExecutionCounters? counters = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
         _functions = functions;
+        _counters = counters;
     }
 
     /// <inheritdoc />
@@ -49,6 +51,9 @@ public sealed class ReferenceGenomeEvaluator<T> : IGenomeEvaluator<T>
         var parameters = genome.ParameterGenes;
         var functionGenes = genome.FunctionGenes;
 
+        // Single null check outside the per-node loop; disabled counters add no per-node work.
+        var nodeExecutions = _counters is null ? null : PrepareCounters(_counters, shape.NodeCount);
+
         foreach (var node in active)
         {
             var function = _functions.Get(functionGenes[node]);
@@ -59,6 +64,10 @@ public sealed class ReferenceGenomeEvaluator<T> : IGenomeEvaluator<T>
             }
 
             slots[shape.InputCount + node] = function.Invoke(arguments.AsSpan(0, arity), parameters[node]);
+            if (nodeExecutions is not null)
+            {
+                nodeExecutions[node]++;
+            }
         }
 
         var outputGenes = genome.OutputGenes;
@@ -66,5 +75,11 @@ public sealed class ReferenceGenomeEvaluator<T> : IGenomeEvaluator<T>
         {
             outputs[output] = slots[outputGenes[output]];
         }
+    }
+
+    private static int[] PrepareCounters(ReferenceExecutionCounters counters, int nodeCount)
+    {
+        counters.Prepare(nodeCount);
+        return counters.NodeExecutions;
     }
 }
