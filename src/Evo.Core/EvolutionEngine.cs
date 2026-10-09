@@ -10,6 +10,23 @@ namespace Evo.Core;
 public sealed record EvolutionProgress(int Generation, FitnessResult BestFitness, string PopulationDigest);
 
 /// <summary>
+/// Estado completo de uma geração avaliada, suficiente para retomar a execução de forma determinística.
+/// </summary>
+/// <param name="Generation">Geração avaliada.</param>
+/// <param name="Population">População da geração (não deve ser mutada após a emissão).</param>
+/// <param name="Fitness">Fitness de cada indivíduo, na mesma ordem da população.</param>
+/// <param name="BestGenome">Melhor genoma acumulado até a geração.</param>
+/// <param name="BestFitness">Melhor fitness acumulado até a geração.</param>
+/// <param name="LastImprovement">Última geração em que o best melhorou (histórico de estagnação).</param>
+public sealed record EvolutionState<T>(
+    int Generation,
+    Genome<T>[] Population,
+    FitnessResult[] Fitness,
+    Genome<T>? BestGenome,
+    FitnessResult BestFitness,
+    int LastImprovement);
+
+/// <summary>
 /// Engine evolutivo determinístico. A avaliação de indivíduos é paralela, mas cada resultado
 /// depende apenas do indivíduo, e os RNGs são chaveados por (seed, geração, índice, fluxo).
 /// </summary>
@@ -18,18 +35,41 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
     private const ulong BreedStreamId = 2;
 
     private readonly Action<EvolutionProgress>? _progress;
+    private readonly Action<EvolutionState<T>>? _checkpoint;
 
-    /// <summary>Cria o engine; <paramref name="progress"/> recebe um relatório por geração completa.</summary>
-    public EvolutionEngine(Action<EvolutionProgress>? progress = null)
+    /// <summary>
+    /// Cria o engine. <paramref name="progress"/> recebe um relatório por geração completa;
+    /// <paramref name="checkpoint"/> recebe o estado completo de cada geração avaliada.
+    /// </summary>
+    public EvolutionEngine(Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
     {
         _progress = progress;
+        _checkpoint = checkpoint;
     }
 
     /// <inheritdoc />
     public EvolutionResult<T> Run(
         IGeneticProblem<T> problem,
         EvolutionOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        Execute(problem, options, null, cancellationToken);
+
+    /// <summary>
+    /// Retoma a execução a partir de um estado salvo. Com as mesmas opções, o resultado é igual ao da
+    /// execução contínua; o progresso volta a ser emitido a partir da geração do estado.
+    /// </summary>
+    public EvolutionResult<T> Resume(
+        IGeneticProblem<T> problem,
+        EvolutionOptions options,
+        EvolutionState<T> state,
+        CancellationToken cancellationToken = default) =>
+        Execute(problem, options, state ?? throw new ArgumentNullException(nameof(state)), cancellationToken);
+
+    private EvolutionResult<T> Execute(
+        IGeneticProblem<T> problem,
+        EvolutionOptions options,
+        EvolutionState<T>? resume,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(problem);
         ArgumentNullException.ThrowIfNull(options);
@@ -54,19 +94,38 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
         var cacheLimit = 4 * n;
 
         var population = new Genome<T>[n];
-        for (var i = 0; i < n; i++)
+        if (resume is null)
         {
-            var rng = RandomStream.Create(options.Seed, 0, (ulong)i, 1);
-            population[i] = operators.CreateInitial(ref rng);
+            for (var i = 0; i < n; i++)
+            {
+                var rng = RandomStream.Create(options.Seed, 0, (ulong)i, 1);
+                population[i] = operators.CreateInitial(ref rng);
+            }
+        }
+        else
+        {
+            if (resume.Population.Length != n || resume.Fitness.Length != n)
+            {
+                throw new ArgumentException("O estado retomado não corresponde a PopulationSize.", nameof(resume));
+            }
+
+            for (var i = 0; i < n; i++)
+            {
+                population[i] = resume.Population[i].Clone(values);
+            }
         }
 
         var fitness = new FitnessResult[n];
         var digest = Evaluate(problem, population, fitness, fitnessEvaluators, genomeEvaluators, cache, cacheLimit, cancellationToken);
+        if (resume is not null && !fitness.AsSpan().SequenceEqual(resume.Fitness))
+        {
+            throw new InvalidOperationException("O fitness do estado retomado não coincide com a reavaliação da população.");
+        }
 
-        var generation = 0;
-        var lastImprovement = 0;
-        Genome<T>? bestGenome = null;
-        var bestFitness = FitnessResult.Invalid();
+        var generation = resume?.Generation ?? 0;
+        var lastImprovement = resume?.LastImprovement ?? 0;
+        Genome<T>? bestGenome = resume?.BestGenome?.Clone(values);
+        var bestFitness = resume?.BestFitness ?? FitnessResult.Invalid();
 
         while (true)
         {
@@ -76,6 +135,7 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
             }
 
             _progress?.Invoke(new EvolutionProgress(generation, bestFitness, digest));
+            _checkpoint?.Invoke(new EvolutionState<T>(generation, population, fitness, bestGenome, bestFitness, lastImprovement));
 
             var reason = CheckTermination(options, generation, lastImprovement, bestFitness, clock, cancellationToken);
             if (reason is { } termination)
