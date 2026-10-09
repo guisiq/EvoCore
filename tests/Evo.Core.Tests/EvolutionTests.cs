@@ -41,10 +41,12 @@ internal sealed class QuadraticFitness : IFitnessEvaluator<double>
 {
     private static readonly double[] Inputs = { -2, -1, -0.5, 0, 0.5, 1, 2 };
     private readonly Action? _onEvaluate;
+    private readonly Func<double, double> _target;
 
-    public QuadraticFitness(Action? onEvaluate = null)
+    public QuadraticFitness(Action? onEvaluate = null, Func<double, double>? target = null)
     {
         _onEvaluate = onEvaluate;
+        _target = target ?? (x => x * x);
     }
 
     public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
@@ -55,7 +57,7 @@ internal sealed class QuadraticFitness : IFitnessEvaluator<double>
         foreach (var x in Inputs)
         {
             evaluator.Evaluate(genome, new[] { x }, output);
-            var d = output[0] - (x * x);
+            var d = output[0] - _target(x);
             if (double.IsNaN(d) || double.IsInfinity(d))
             {
                 return FitnessResult.Invalid();
@@ -318,12 +320,12 @@ public sealed class EvolutionEngineTests
 {
     private static readonly GenomeShape Shape = new(1, 8, 1, 2, 3);
 
-    private static EvolutionTestProblem<double> Problem(Action? onEvaluate = null) => new(
+    private static EvolutionTestProblem<double> Problem(Action? onEvaluate = null, Func<double, double>? target = null) => new(
         Shape,
         StandardDoubleFunctionSet.Instance,
         DoubleValueSemantics.Instance,
         DoubleParameterStrategy.Instance,
-        () => new QuadraticFitness(onEvaluate));
+        () => new QuadraticFitness(onEvaluate, target));
 
     private static EvolutionOptions Options(int workers) => new()
     {
@@ -408,6 +410,17 @@ public sealed class EvolutionEngineTests
     }
 
     [Fact]
+    public void Evolution_fake_problem_improves_best()
+    {
+        var reports = new List<EvolutionProgress>();
+        var options = Options(2) with { PopulationSize = 60, MaxGenerations = 300 };
+        var result = new EvolutionEngine<double>(reports.Add).Run(Problem(target: x => x * x * x), options);
+
+        Assert.True(result.BestFitness.Value > reports[0].BestFitness.Value,
+            $"best gen0={reports[0].BestFitness.Value} final={result.BestFitness.Value} gens={result.GenerationsRun}");
+    }
+
+    [Fact]
     public void Evolution_cache_reuses_repeated_individuals()
     {
         var evaluations = 0;
@@ -474,13 +487,32 @@ public sealed class EvolutionEngineTests
     [Fact]
     public void Evolution_target_fitness_is_worker_count_equivalent()
     {
-        var reports = new List<EvolutionProgress>();
-        new EvolutionEngine<double>(reports.Add).Run(Problem(), Options(1) with { MaxGenerations = 15 });
-        var target = reports[0].BestFitness.Value;
+        var cubic = (Func<double, double>)(x => x * x * x);
+        var baseline = Options(1) with { PopulationSize = 60, MaxGenerations = 300 };
+        var target = new EvolutionEngine<double>().Run(Problem(target: cubic), baseline).BestFitness.Value;
 
-        AssertWorkerEquivalence(
-            Options(1) with { MaxGenerations = 1000, TargetFitness = target },
-            TerminationReason.TargetFitness);
+        var sequences = new List<List<EvolutionProgress>>();
+        var results = new List<EvolutionResult<double>>();
+        foreach (var workers in new[] { 1, 2, 4, 8 })
+        {
+            var reports = new List<EvolutionProgress>();
+            var options = baseline with { WorkerCount = workers, TargetFitness = target };
+            results.Add(new EvolutionEngine<double>(reports.Add).Run(Problem(target: cubic), options));
+            sequences.Add(reports);
+        }
+
+        foreach (var sequence in sequences.Skip(1))
+        {
+            Assert.Equal(sequences[0], sequence);
+        }
+
+        foreach (var result in results)
+        {
+            Assert.Equal(TerminationReason.TargetFitness, result.Termination);
+            Assert.True(result.GenerationsRun >= 1);
+            Assert.Equal(results[0].GenerationsRun, result.GenerationsRun);
+            Assert.Equal(results[0].BestFitness, result.BestFitness);
+        }
     }
 
     [Fact]
