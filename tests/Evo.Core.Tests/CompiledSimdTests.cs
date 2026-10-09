@@ -226,4 +226,121 @@ public sealed class CompiledSimdTests
 
         Assert.True(found, "Expected at least one genome with a non-kernel active function (ProtectedDivide/ProtectedLog/etc.).");
     }
+
+    private static readonly string[] SimdSupportedOps = { "Constant", "Add", "Subtract", "Multiply", "Negate", "Abs", "Square", "Min", "Max" };
+
+    private static int[] SimdSupportedIds<T>(IFunctionSet<T> functions) =>
+        Enumerable.Range(0, functions.Count).Where(i => SimdSupportedOps.Contains(functions.Get(i).Id)).ToArray();
+
+    private static Genome<double> SupportedDoubleGenome(ulong seed, IFunctionSet<double> functions, int[] supported)
+    {
+        var rng = RandomStream.Create(seed, 2, 0, 0);
+        var fg = new int[Shape.NodeCount];
+        var cg = new int[Shape.NodeCount * Shape.MaxArity];
+        var pg = new double[Shape.NodeCount];
+        for (var n = 0; n < Shape.NodeCount; n++)
+        {
+            fg[n] = supported[rng.NextInt(0, supported.Length)];
+            for (var a = 0; a < Shape.MaxArity; a++)
+            {
+                cg[n * Shape.MaxArity + a] = rng.NextInt(0, Shape.InputCount + n);
+            }
+
+            pg[n] = rng.NextDouble() * 4 - 2;
+        }
+
+        var og = new[] { rng.NextInt(0, Shape.InputCount + Shape.NodeCount), rng.NextInt(0, Shape.InputCount + Shape.NodeCount) };
+        return Genome<double>.FromGenes(Shape, fg, cg, pg, og, DoubleValueSemantics.Instance, functions);
+    }
+
+    private static Genome<int> SupportedInt32Genome(ulong seed, IFunctionSet<int> functions, int[] supported)
+    {
+        var rng = RandomStream.Create(seed, 2, 0, 0);
+        var fg = new int[Shape.NodeCount];
+        var cg = new int[Shape.NodeCount * Shape.MaxArity];
+        var pg = new int[Shape.NodeCount];
+        for (var n = 0; n < Shape.NodeCount; n++)
+        {
+            fg[n] = supported[rng.NextInt(0, supported.Length)];
+            for (var a = 0; a < Shape.MaxArity; a++)
+            {
+                cg[n * Shape.MaxArity + a] = rng.NextInt(0, Shape.InputCount + n);
+            }
+
+            pg[n] = rng.NextInt(-20, 20);
+        }
+
+        var og = new[] { rng.NextInt(0, Shape.InputCount + Shape.NodeCount), rng.NextInt(0, Shape.InputCount + Shape.NodeCount) };
+        return Genome<int>.FromGenes(Shape, fg, cg, pg, og, Int32ValueSemantics.Instance, functions);
+    }
+
+    [Fact]
+    public void SimdDouble_supported_only_genomes_match_reference_within_1e12_and_use_simd()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var supported = SimdSupportedIds(functions);
+        var reference = new ReferenceGenomeEvaluator<double>(functions);
+        var simd = new SimdGenomeEvaluator<double>(functions, DoubleValueSemantics.Instance);
+        var caseCount = 2 * System.Numerics.Vector<double>.Count + 3;
+        var inputs = RandomDoubleCases(29, caseCount);
+        for (var seed = 0UL; seed < 40; seed++)
+        {
+            var genome = SupportedDoubleGenome(seed, functions, supported);
+            var expected = new double[caseCount * Shape.OutputCount];
+            for (var c = 0; c < caseCount; c++)
+            {
+                reference.Evaluate(genome, inputs.AsSpan(c * Shape.InputCount, Shape.InputCount), expected.AsSpan(c * Shape.OutputCount, Shape.OutputCount));
+            }
+
+            var actual = new double[caseCount * Shape.OutputCount];
+            var report = simd.Evaluate(genome, inputs, caseCount, actual);
+            Assert.Equal(EvaluationBackend.Simd, report.Backend);
+            Assert.True(report.VectorBlocks > 0, $"seed {seed}");
+            for (var i = 0; i < expected.Length; i++)
+            {
+                if (double.IsNaN(expected[i]))
+                {
+                    Assert.True(double.IsNaN(actual[i]), $"seed {seed} index {i}");
+                    continue;
+                }
+
+                if (double.IsInfinity(expected[i]))
+                {
+                    Assert.Equal(expected[i], actual[i]);
+                    continue;
+                }
+
+                var tol = 1e-12 * Math.Max(1.0, Math.Abs(expected[i]));
+                Assert.True(Math.Abs(expected[i] - actual[i]) <= tol, $"seed {seed} index {i}");
+            }
+        }
+    }
+
+    [Fact]
+    public void SimdInt32_supported_only_genomes_match_reference_exactly_and_use_simd()
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        var supported = SimdSupportedIds(functions);
+        var reference = new ReferenceGenomeEvaluator<int>(functions);
+        var simd = new SimdGenomeEvaluator<int>(functions, Int32ValueSemantics.Instance);
+        var caseCount = 2 * System.Numerics.Vector<int>.Count + 3;
+        var inputs = RandomIntCases(31, caseCount);
+        inputs[0] = int.MinValue;
+        inputs[1] = int.MaxValue;
+        for (var seed = 0UL; seed < 40; seed++)
+        {
+            var genome = SupportedInt32Genome(seed, functions, supported);
+            var expected = new int[caseCount * Shape.OutputCount];
+            for (var c = 0; c < caseCount; c++)
+            {
+                reference.Evaluate(genome, inputs.AsSpan(c * Shape.InputCount, Shape.InputCount), expected.AsSpan(c * Shape.OutputCount, Shape.OutputCount));
+            }
+
+            var actual = new int[caseCount * Shape.OutputCount];
+            var report = simd.Evaluate(genome, inputs, caseCount, actual);
+            Assert.Equal(EvaluationBackend.Simd, report.Backend);
+            Assert.True(report.VectorBlocks > 0, $"seed {seed}");
+            Assert.Equal(expected, actual);
+        }
+    }
 }

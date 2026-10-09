@@ -160,4 +160,164 @@ public sealed class CompiledDomainParityTests
             Assert.Equal(2 * firstScalar[n], counters.ScalarExecutions[n]);
         }
     }
+
+    [Fact]
+    public void CompiledDouble_shared_dag_counts_each_active_node_once_per_case()
+    {
+        AssertSharedDagCompiledCounts(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance, 0.0, new[] { 0.5 }, new[] { -3.0 });
+    }
+
+    [Fact]
+    public void CompiledInt32_shared_dag_counts_each_active_node_once_per_case()
+    {
+        AssertSharedDagCompiledCounts(StandardInt32FunctionSet.Instance, Int32ValueSemantics.Instance, 0, new[] { 5 }, new[] { -7 });
+    }
+
+    [Fact]
+    public void CompiledDoubleArray_shared_dag_counts_each_active_node_once_per_case()
+    {
+        AssertSharedDagCompiledCounts(
+            StandardDoubleArrayFunctionSet.Instance,
+            DoubleArrayValueSemantics.Instance,
+            new[] { 1.0, 2.0 },
+            new[] { new[] { 0.5, -1.0 } },
+            new[] { new[] { -2.0, 3.0 } });
+    }
+
+    [Fact]
+    public void CompiledInt32Array_shared_dag_counts_each_active_node_once_per_case()
+    {
+        AssertSharedDagCompiledCounts(
+            StandardInt32ArrayFunctionSet.Instance,
+            Int32ArrayValueSemantics.Instance,
+            new[] { 1 },
+            new[] { new[] { 5, -7 } },
+            new[] { new[] { 0, 9 } });
+    }
+
+    [Fact]
+    public void SimdDouble_shared_dag_counts_kernel_blocks_and_tails_for_all_case_shapes()
+    {
+        AssertSimdSharedDagCounts(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance, 0.0, i => (i % 7) * 0.5 - 1.0, System.Numerics.Vector<double>.Count);
+    }
+
+    [Fact]
+    public void SimdInt32_shared_dag_counts_kernel_blocks_and_tails_for_all_case_shapes()
+    {
+        AssertSimdSharedDagCounts(StandardInt32FunctionSet.Instance, Int32ValueSemantics.Instance, 0, i => (i % 11) - 5, System.Numerics.Vector<int>.Count);
+    }
+
+    private static int IdOf<T>(IFunctionSet<T> functions, string name)
+    {
+        for (var i = 0; i < functions.Count; i++)
+        {
+            if (functions.Get(i).Id == name)
+            {
+                return i;
+            }
+        }
+
+        throw new InvalidOperationException($"Função '{name}' ausente no conjunto '{functions.Id}'.");
+    }
+
+    // Nó 0 (endereço 1): Add(in0, in0). Nó 1 (endereço 2): Multiply(nó 0, nó 0), usado pelas saídas 0 e 2.
+    // Nó 2 (endereço 3): Negate(in0) permanece inativo.
+    private static void AssertSharedDagCompiledCounts<T>(IFunctionSet<T> functions, IValueSemantics<T> semantics, T parameter, T[] inputsFirst, T[] inputsSecond)
+    {
+        var shape = new GenomeShape(InputCount: 1, NodeCount: 3, OutputCount: 3, MaxArity: 2, LevelsBack: 3);
+        var genome = Genome<T>.FromGenes(
+            shape,
+            new[] { IdOf(functions, "Add"), IdOf(functions, "Multiply"), IdOf(functions, "Negate") },
+            new[] { 0, 0, 1, 1, 0, 0 },
+            Enumerable.Repeat(parameter, 3).ToArray(),
+            new[] { 2, 1, 2 },
+            semantics,
+            functions);
+        var counters = new CompiledExecutionCounters();
+        var compiled = new CompiledGenomeEvaluator<T>(functions, semantics, counters: counters);
+        var reference = new ReferenceGenomeEvaluator<T>(functions);
+
+        var first = new T[3];
+        counters.Reset();
+        compiled.Evaluate(genome, inputsFirst, first);
+        Assert.Equal(1, counters.ScalarExecutions[0]);
+        Assert.Equal(1, counters.ScalarExecutions[1]);
+        Assert.Equal(0, counters.ScalarExecutions[2]);
+        Assert.Equal(first[0], first[2]);
+        var expectedFirst = new T[3];
+        reference.Evaluate(genome, inputsFirst, expectedFirst);
+        Assert.Equal(expectedFirst, first);
+
+        // Segunda chamada com novos inputs: contagens acumulam exatamente 1 por chamada e saídas seguem os novos inputs.
+        var second = new T[3];
+        compiled.Evaluate(genome, inputsSecond, second);
+        Assert.Equal(2, counters.ScalarExecutions[0]);
+        Assert.Equal(2, counters.ScalarExecutions[1]);
+        Assert.Equal(0, counters.ScalarExecutions[2]);
+        var expectedSecond = new T[3];
+        reference.Evaluate(genome, inputsSecond, expectedSecond);
+        Assert.Equal(expectedSecond, second);
+    }
+
+    // Nó 0 (endereço 2): Add(in0, in1) compartilhado; nó 1 (endereço 3): Multiply(nó 0, nó 0);
+    // nó 2 (endereço 4): Abs(in0) permanece inativo. Saídas: nó 1, nó 0, nó 1.
+    private static void AssertSimdSharedDagCounts<T>(IFunctionSet<T> functions, IValueSemantics<T> semantics, T parameter, Func<int, T> inputAt, int width) where T : struct
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 3, OutputCount: 3, MaxArity: 2, LevelsBack: 3);
+        var genome = Genome<T>.FromGenes(
+            shape,
+            new[] { IdOf(functions, "Add"), IdOf(functions, "Multiply"), IdOf(functions, "Abs") },
+            new[] { 0, 1, 2, 2, 0, 0 },
+            Enumerable.Repeat(parameter, 3).ToArray(),
+            new[] { 3, 2, 3 },
+            semantics,
+            functions);
+        var reference = new ReferenceGenomeEvaluator<T>(functions);
+        var counters = new CompiledExecutionCounters();
+        var simd = new SimdGenomeEvaluator<T>(functions, semantics, counters: counters);
+
+        foreach (var caseCount in new[] { width - 1, width, 2 * width, 2 * width + 3 })
+        {
+            var inputs = new T[caseCount * 2];
+            for (var i = 0; i < inputs.Length; i++)
+            {
+                inputs[i] = inputAt(i);
+            }
+
+            var outputs = new T[caseCount * 3];
+            counters.Reset();
+            var report = simd.Evaluate(genome, inputs, caseCount, outputs);
+
+            var expected = new T[caseCount * 3];
+            for (var c = 0; c < caseCount; c++)
+            {
+                reference.Evaluate(genome, inputs.AsSpan(c * 2, 2), expected.AsSpan(c * 3, 3));
+            }
+
+            Assert.Equal(expected, outputs);
+            Assert.Equal(caseCount, report.CaseCount);
+            if (caseCount < width)
+            {
+                Assert.Equal(EvaluationBackend.CompiledScalar, report.Backend);
+                Assert.Equal(0, report.VectorBlocks);
+                Assert.Equal(caseCount, report.TailCases);
+                Assert.Equal(caseCount, counters.ScalarExecutions[0]);
+                Assert.Equal(caseCount, counters.ScalarExecutions[1]);
+            }
+            else
+            {
+                Assert.Equal(EvaluationBackend.Simd, report.Backend);
+                Assert.Equal(caseCount / width, report.VectorBlocks);
+                Assert.Equal(caseCount % width, report.TailCases);
+                foreach (var node in new[] { 0, 1 })
+                {
+                    Assert.Equal(report.VectorBlocks, counters.KernelExecutions[node]);
+                    Assert.Equal(report.TailCases, counters.TailExecutions[node]);
+                }
+            }
+
+            Assert.Equal(0, counters.KernelExecutions[2]);
+            Assert.Equal(0, counters.TailExecutions[2]);
+        }
+    }
 }
