@@ -159,6 +159,30 @@ public static class CheckpointFile
         StagnationGenerations = options.StagnationGenerations,
     };
 
+    /// <summary>
+    /// Substitui o destino por rename. No Windows, o destino pode ficar bloqueado por um scanner
+    /// transitório; tenta novamente por curto período antes de falhar.
+    /// </summary>
+    private static void MoveWithRetry(string temp, string fullPath)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, fullPath, overwrite: true);
+                return;
+            }
+            catch (UnauthorizedAccessException) when (attempt < 20)
+            {
+                Thread.Sleep(25 * attempt);
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(25 * attempt);
+            }
+        }
+    }
+
     private static void WriteAtomically(string path, byte[] bytes)
     {
         var fullPath = Path.GetFullPath(path);
@@ -173,7 +197,7 @@ public static class CheckpointFile
                 stream.Flush(true);
             }
 
-            File.Move(temp, fullPath, overwrite: true);
+            MoveWithRetry(temp, fullPath);
         }
         catch
         {
