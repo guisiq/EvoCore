@@ -222,22 +222,32 @@ public sealed class IlgpuLifecycleTests
         var selection = CpuSelection();
         Context? createdContext = null;
 
-        var thrown = Assert.Throws<OutOfMemoryException>(() =>
-            new IlgpuGenomeEvaluator<double>(
-                functions,
-                fallback: null,
-                selectionOverride: selection,
-                contextFactory: _ =>
-                {
-                    createdContext = Context.Create(builder => builder.CPU());
-                    return createdContext;
-                },
-                acceleratorFactory: static (_, _) => throw new OutOfMemoryException("sem-memoria"),
-                beforeKernelExecution: null));
+        try
+        {
+            var thrown = Assert.Throws<OutOfMemoryException>(() =>
+                new IlgpuGenomeEvaluator<double>(
+                    functions,
+                    fallback: null,
+                    selectionOverride: selection,
+                    contextFactory: _ =>
+                    {
+                        createdContext = Context.Create(builder => builder.CPU());
+                        return createdContext;
+                    },
+                    acceleratorFactory: static (_, _) => throw new OutOfMemoryException("sem-memoria"),
+                    beforeKernelExecution: null));
 
-        Assert.Equal("sem-memoria", thrown.Message);
-        Assert.NotNull(createdContext);
-        Assert.True(createdContext!.IsDisposed);
+            Assert.Equal("sem-memoria", thrown.Message);
+            Assert.NotNull(createdContext);
+            Assert.True(createdContext!.IsDisposed);
+        }
+        finally
+        {
+            // Mesma justificativa do teste anterior: a selecao compartilhada (por valor) fica marcada como
+            // fallback forcado apos a falha de construcao; sem o reset no finally, uma assercao que falhe
+            // aqui deixaria o estado global contaminado para os proximos testes que reutilizam CpuSelection().
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
     }
 
     [Fact]
