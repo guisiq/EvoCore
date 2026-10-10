@@ -4,6 +4,7 @@ using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.OpenCL;
 using Evo.Core;
+using Evo.Core.Compiled;
 using Evo.Core.Functions;
 using Evo.Core.Values;
 using Evo.Ilgpu;
@@ -194,6 +195,75 @@ public sealed class IlgpuDeviceMatrixTests
             using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
             Assert.Equal(expected[0], actual[0]);
+        }
+    }
+
+    /// <summary>
+    /// Compiled CPU é um caminho distinto da referência: ambos devem produzir a mesma saída para os 4 tipos,
+    /// e o ILGPU do dispositivo deve igualar as duas.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Compiled_cpu_and_device_match_reference_for_four_types(string label, IlgpuBackendSelection selection)
+    {
+        {
+            var functions = StandardDoubleFunctionSet.Instance;
+            var genome = DoubleScenario(functions);
+            var inputs = new[] { 3.0, -0.5 };
+            var expected = new double[2];
+            var compiled = new double[2];
+            var device = new double[2];
+            new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double>(functions, DoubleValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected, compiled, $"{label} compiled double");
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected, device, $"{label} device double");
+        }
+
+        {
+            var functions = StandardInt32FunctionSet.Instance;
+            var genome = IntScenario(functions);
+            var inputs = new[] { -4, 7 };
+            var expected = new int[1];
+            var compiled = new int[1];
+            var device = new int[1];
+            new ReferenceGenomeEvaluator<int>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<int>(functions, Int32ValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<int>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            Assert.Equal(expected, compiled);
+            Assert.Equal(expected, device);
+        }
+
+        {
+            var functions = StandardDoubleArrayFunctionSet.Instance;
+            var genome = DoubleArrayScenario(functions);
+            var inputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+            var expected = new double[1][];
+            var compiled = new double[1][];
+            var device = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            Assert.Equal(expected[0], compiled[0]);
+            Assert.Equal(expected[0], device[0]);
+        }
+
+        {
+            var functions = StandardInt32ArrayFunctionSet.Instance;
+            var genome = IntArrayScenario(functions);
+            var inputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+            var expected = new int[1][];
+            var compiled = new int[1][];
+            var device = new int[1][];
+            new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            Assert.Equal(expected[0], compiled[0]);
+            Assert.Equal(expected[0], device[0]);
         }
     }
 
