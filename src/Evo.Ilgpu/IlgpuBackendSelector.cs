@@ -23,11 +23,15 @@ public enum IlgpuBackendKind
 /// <param name="DeviceIndex">Index in <c>Context.Devices</c> of the selected device, or -1 for CPU fallback.</param>
 /// <param name="DeviceName">Name of the selected device, or a fallback description.</param>
 /// <param name="FallbackReason">Why OpenCL was not used; null when an OpenCL device was selected.</param>
+/// <param name="WarpSize">Capability captured when the device was probed, used to detect identity drift across contexts.</param>
+/// <param name="MaxNumThreads">Capability captured when the device was probed, used to detect identity drift across contexts.</param>
 public sealed record IlgpuBackendSelection(
     IlgpuBackendKind Kind,
     int DeviceIndex,
     string DeviceName,
-    string? FallbackReason)
+    string? FallbackReason,
+    int WarpSize = 0,
+    int MaxNumThreads = 0)
 {
     /// <summary>Human-readable backend name for diagnostics.</summary>
     public string BackendName => Kind switch
@@ -79,7 +83,8 @@ public static class IlgpuBackendSelector
                 try
                 {
                     using var probe = acceleratorFactory(context, i);
-                    return new IlgpuBackendSelection(IlgpuBackendKind.OpenClDevice, i, devices[i].Name, null);
+                    return new IlgpuBackendSelection(
+                        IlgpuBackendKind.OpenClDevice, i, devices[i].Name, null, probe.WarpSize, probe.MaxNumThreads);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
@@ -95,7 +100,8 @@ public static class IlgpuBackendSelector
                     try
                     {
                         using var probe = acceleratorFactory(context, i);
-                        return new IlgpuBackendSelection(IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, openClFailure);
+                        return new IlgpuBackendSelection(
+                            IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, openClFailure, probe.WarpSize, probe.MaxNumThreads);
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {

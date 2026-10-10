@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
+using ILGPU.Runtime.OpenCL;
 using Evo.Core;
 using Evo.Core.Functions;
 using Evo.Core.Values;
@@ -14,13 +15,15 @@ public sealed class IlgpuLifecycleTests
 {
     private static IlgpuBackendSelection CpuSelection()
     {
-        using var context = Context.Create(builder => builder.CPU());
+        using var context = Context.Create(builder => builder.OpenCL().CPU());
         var devices = context.Devices.ToArray();
         for (var i = 0; i < devices.Length; i++)
         {
             if (devices[i].AcceleratorType == AcceleratorType.CPU)
             {
-                return new IlgpuBackendSelection(IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, "teste");
+                using var accelerator = devices[i].CreateAccelerator(context);
+                return new IlgpuBackendSelection(
+                    IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, "teste", accelerator.WarpSize, accelerator.MaxNumThreads);
             }
         }
 
@@ -244,6 +247,27 @@ public sealed class IlgpuLifecycleTests
             functions,
             fallback: null,
             selectionOverride: selection,
+            contextFactory: _ => Context.Create(builder => builder.CPU()),
+            acceleratorFactory: null,
+            beforeKernelExecution: null);
+
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+    }
+
+    [Fact]
+    public void Evaluator_falls_back_when_device_capabilities_diverge_from_selection()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var real = CpuSelection();
+        // Capacidades divergentes da sondagem original: a reprodução reportada seleciona
+        // NumThreads=16/WarpSize=4 e reinicializa com NumThreads=1024/WarpSize=32.
+        var mismatched = real with { WarpSize = real.WarpSize + 1, MaxNumThreads = real.MaxNumThreads + 1 };
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: mismatched,
             contextFactory: _ => Context.Create(builder => builder.CPU()),
             acceleratorFactory: null,
             beforeKernelExecution: null);

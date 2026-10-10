@@ -199,17 +199,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     }
 
     private static Context CreateContext(IlgpuBackendSelection selection) =>
-        Context.Create(builder =>
-        {
-            if (selection.Kind == IlgpuBackendKind.OpenClDevice)
-            {
-                builder.OpenCL();
-            }
-            else
-            {
-                builder.CPU();
-            }
-        });
+        Context.Create(builder => builder.OpenCL().CPU());
 
     private static Accelerator CreateAccelerator(Context context, IlgpuBackendSelection selection)
     {
@@ -226,7 +216,16 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             throw new InvalidOperationException($"dispositivo '{selection.DeviceName}' não reconhecido no novo contexto");
         }
 
-        return device.CreateAccelerator(context);
+        var accelerator = device.CreateAccelerator(context);
+        if ((selection.WarpSize != 0 && accelerator.WarpSize != selection.WarpSize)
+            || (selection.MaxNumThreads != 0 && accelerator.MaxNumThreads != selection.MaxNumThreads))
+        {
+            accelerator.Dispose();
+            throw new InvalidOperationException(
+                $"dispositivo '{selection.DeviceName}' não reconhecido no novo contexto: capacidades divergentes");
+        }
+
+        return accelerator;
     }
 
     private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) =>
