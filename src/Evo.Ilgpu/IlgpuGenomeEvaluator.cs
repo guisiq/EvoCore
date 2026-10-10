@@ -125,7 +125,6 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _accelerator?.Dispose();
         _context?.Dispose();
         _accelerator = null;
         _context = null;
@@ -301,9 +300,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private double[] RunDouble(int[] program, double[] constants, double[] slots, int[] outputSlots, int lanes, int instructions)
     {
         var accelerator = _accelerator!;
-        using var programBuffer = accelerator.Allocate1D(program);
+        using var programBuffer = accelerator.Allocate1D(Pad(program));
         using var constantBuffer = accelerator.Allocate1D(Pad(constants));
-        using var slotBuffer = accelerator.Allocate1D(slots);
+        using var slotBuffer = accelerator.Allocate1D(Pad(slots));
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var outputBuffer = accelerator.Allocate1D<double>(Math.Max(1, outputSlots.Length * lanes));
         _doubleKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
@@ -317,9 +316,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private int[] RunInt(int[] program, int[] constants, int[] slots, int[] outputSlots, int lanes, int instructions)
     {
         var accelerator = _accelerator!;
-        using var programBuffer = accelerator.Allocate1D(program);
+        using var programBuffer = accelerator.Allocate1D(Pad(program));
         using var constantBuffer = accelerator.Allocate1D(Pad(constants));
-        using var slotBuffer = accelerator.Allocate1D(slots);
+        using var slotBuffer = accelerator.Allocate1D(Pad(slots));
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var outputBuffer = accelerator.Allocate1D<int>(Math.Max(1, outputSlots.Length * lanes));
         _intKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
@@ -514,3 +513,5 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         }
     }
 }
+
+
