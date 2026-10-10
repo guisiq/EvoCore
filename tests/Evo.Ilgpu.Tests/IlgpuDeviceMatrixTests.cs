@@ -8,6 +8,7 @@ using Evo.Core.Functions;
 using Evo.Core.Values;
 using Evo.Ilgpu;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Evo.Ilgpu.Tests;
 
@@ -19,6 +20,10 @@ namespace Evo.Ilgpu.Tests;
 /// </summary>
 public sealed class IlgpuDeviceMatrixTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public IlgpuDeviceMatrixTests(ITestOutputHelper output) => _output = output;
+
     /// <summary>
     /// MemberData compartilhado com <see cref="OpenClDeviceCatalogTests"/>. Linhas indisponíveis carregam a causa
     /// e são reprovadas pela matriz, nunca aprovadas silenciosamente.
@@ -48,6 +53,7 @@ public sealed class IlgpuDeviceMatrixTests
             Assert.False(string.IsNullOrWhiteSpace(label), "linha indisponível deve ter identidade");
             Assert.False(string.IsNullOrWhiteSpace(cause), $"{label} deve registrar a causa da indisponibilidade");
             Assert.DoesNotContain(Devices(), approved => (string)approved[0] == label);
+            _output.WriteLine($"DISPOSITIVO INDISPONÍVEL | identidade={label} | status=INDISPONÍVEL (não aprovado) | causa={cause}");
         }
     }
 
