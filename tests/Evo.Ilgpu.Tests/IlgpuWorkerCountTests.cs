@@ -1,4 +1,7 @@
 using System.Collections.Concurrent;
+using ILGPU;
+using ILGPU.Runtime;
+using ILGPU.Runtime.CPU;
 using Evo.Core;
 using Evo.Core.Functions;
 using Evo.Core.Values;
@@ -197,6 +200,79 @@ public sealed class IlgpuWorkerCountTests
         {
             Assert.True(context.IsDisposed);
         }
+    }
+
+    private static Genome<double> ProtectedLogGenome(IFunctionSet<double> functions)
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        return Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "log")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+    }
+
+    /// <summary>
+    /// Builds a private (non-shared) ILGPU-CPU selection, resolved from a dedicated <see cref="Context"/>, so this
+    /// test never touches the process-wide <see cref="IlgpuBackendSelector.Selection"/> singleton used by other
+    /// tests that run in parallel in this assembly.
+    /// </summary>
+    private static (Context Context, IlgpuBackendSelection Selection) CreatePrivateCpuSelection()
+    {
+        var context = Context.Create(builder => builder.CPU());
+        var device = context.Devices.First(d => d.AcceleratorType == AcceleratorType.CPU);
+        using var accelerator = device.CreateAccelerator(context);
+        var selection = new IlgpuBackendSelection(
+            IlgpuBackendKind.IlgpuCpu,
+            0,
+            device.Name,
+            null,
+            device.WarpSize,
+            device.MaxNumThreads,
+            device.NumMultiprocessors,
+            device.MaxNumThreadsPerGroup,
+            accelerator is CPUAccelerator cpu ? cpu.NumThreads : 0);
+        return (context, selection);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void One_worker_device_init_failure_forces_cpu_fallback_for_all_workers_sharing_the_selection(int workerCount)
+    {
+        var (context, selection) = CreatePrivateCpuSelection();
+        using var _ = context;
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = ProtectedLogGenome(functions);
+        var inputs = new[] { 7.0, 1.0 };
+
+        // Worker 0 falha a inicialização do dispositivo depois da mesma seleção compartilhada.
+        using (var failing = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: _ => Context.Create(builder => builder.CPU()),
+            acceleratorFactory: (_, _) => throw new InvalidOperationException("falha-init-worker-controlada"),
+            beforeKernelExecution: null))
+        {
+            var output = new double[1];
+            failing.Evaluate(genome, inputs, output);
+            Assert.Equal("CPU fallback", failing.Backend);
+        }
+
+        var backends = new string[workerCount];
+        var devices = new string[workerCount];
+        for (var w = 0; w < workerCount; w++)
+        {
+            using var evaluator = new IlgpuGenomeEvaluator<double>(
+                functions, fallback: null, selectionOverride: selection,
+                contextFactory: _ => context, acceleratorFactory: null, beforeKernelExecution: null);
+            var output = new double[1];
+            evaluator.Evaluate(genome, inputs, output);
+            backends[w] = evaluator.Backend;
+            devices[w] = evaluator.DeviceName;
+        }
+
+        Assert.All(backends, backend => Assert.Equal("CPU fallback", backend));
+        Assert.All(devices, device => Assert.Equal("nenhum", device));
     }
 
     [Fact]

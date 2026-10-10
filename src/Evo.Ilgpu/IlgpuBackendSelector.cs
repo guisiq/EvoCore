@@ -67,8 +67,45 @@ public static class IlgpuBackendSelector
 {
     private static readonly Lazy<IlgpuBackendSelection> Cached = new(Probe, isThreadSafe: true);
 
+    /// <summary>
+    /// Tracks, per selection instance, whether a worker observed a device initialization failure after the
+    /// shared selection pointed to a real accelerator. Once set, every evaluator sharing that selection
+    /// (already running or newly created) converges to CPU fallback, so a run never mixes effective backends
+    /// across workers.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<IlgpuBackendSelection, string> ForcedFallbackReasons = new();
+
     /// <summary>Selection resolved once per process, so every worker of a run uses the same device.</summary>
     public static IlgpuBackendSelection Selection => Cached.Value;
+
+    /// <summary>
+    /// Records that a worker failed to initialize the device for <paramref name="selection"/> after the shared
+    /// selection pointed to a real accelerator. Idempotent: only the first reported reason is kept.
+    /// </summary>
+    internal static void ReportInitializationFailure(IlgpuBackendSelection selection, string reason)
+    {
+        if (selection.Kind != IlgpuBackendKind.CpuFallback)
+        {
+            ForcedFallbackReasons.TryAdd(selection, reason);
+        }
+    }
+
+    /// <summary>True when some worker sharing <paramref name="selection"/> already reported an initialization failure.</summary>
+    internal static bool TryGetForcedFallbackReason(IlgpuBackendSelection selection, out string reason)
+    {
+        if (ForcedFallbackReasons.TryGetValue(selection, out var found))
+        {
+            reason = found;
+            return true;
+        }
+
+        reason = string.Empty;
+        return false;
+    }
+
+    /// <summary>Test-only reset of the shared forced-fallback state so test selections do not leak across cases.</summary>
+    internal static void ResetForcedFallbackForTests(IlgpuBackendSelection selection) =>
+        ForcedFallbackReasons.TryRemove(selection, out _);
 
     internal static IlgpuBackendSelection ProbeForTests(
         Func<Context> contextFactory,

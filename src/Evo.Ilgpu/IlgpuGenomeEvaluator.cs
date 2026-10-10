@@ -110,6 +110,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             {
                 ReleaseDevice();
                 _unavailableReason = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
+                IlgpuBackendSelector.ReportInitializationFailure(_selection, _unavailableReason);
             }
             catch
             {
@@ -161,6 +162,15 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         var outputArray = new T[outputs.Length];
         LastEvaluationUsedDevice = false;
         LastDeviceExecutionCounts = null;
+
+        if (_accelerator is not null && IlgpuBackendSelector.TryGetForcedFallbackReason(_selection, out var forcedReason))
+        {
+            // Outro worker com a mesma seleção falhou ao inicializar o dispositivo depois da escolha comum.
+            // Para não misturar backends efetivos entre workers da mesma execução, este avaliador também
+            // converge para CPU fallback a partir daqui, liberando o acelerador que já havia inicializado.
+            ReleaseDevice();
+            _unavailableReason = forcedReason;
+        }
 
         string? reason = _disposed ? "avaliador descartado" : _unavailableReason;
         if (_accelerator is not null)
