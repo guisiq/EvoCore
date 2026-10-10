@@ -378,26 +378,44 @@ public sealed class IlgpuLifecycleTests
         var genome = Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
             [0.0], [2], DoubleValueSemantics.Instance, functions);
         MemoryBuffer[]? observedBuffers = null;
-        using var evaluator = new IlgpuGenomeEvaluator<double>(
+        var forcedFailure = new InvalidOperationException("falha-lancamento-double");
+        var evaluator = new IlgpuGenomeEvaluator<double>(
             functions,
             fallback: null,
             selectionOverride: selection,
             contextFactory: null,
             acceleratorFactory: null,
             beforeKernelExecution: null,
-            launchInvoker: _ => throw new InvalidOperationException("falha-lancamento-double"),
+            launchInvoker: _ => throw forcedFailure,
             synchronizeInvoker: null,
             bufferObserver: buffers => observedBuffers = buffers.ToArray());
 
-        Assert.ThrowsAny<Exception>(() => evaluator.Evaluate(
+        var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(
             Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1], [0.0], [2], DoubleValueSemantics.Instance, functions),
             [1.0, 2.0],
             new double[1]));
+        Assert.Same(forcedFailure, error);
         Assert.NotNull(observedBuffers);
         Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
         Assert.StartsWith("ILGPU", evaluator.Backend);
         Assert.NotEqual("nenhum", evaluator.DeviceName);
         Assert.DoesNotContain("operandos de array", evaluator.LastFallbackReason ?? string.Empty);
+
+        var accelerator = evaluator.InternalAccelerator;
+        var context = evaluator.InternalContext;
+        Assert.NotNull(accelerator);
+        Assert.NotNull(context);
+        Assert.False(accelerator!.IsDisposed);
+        Assert.False(context!.IsDisposed);
+
+        evaluator.Dispose();
+        Assert.True(accelerator.IsDisposed);
+        Assert.True(context.IsDisposed);
+
+        // Descarte repetido deve ser idempotente e não relançar a falha capturada.
+        evaluator.Dispose();
+        Assert.True(accelerator.IsDisposed);
+        Assert.True(context.IsDisposed);
     }
 
     [Fact]
@@ -409,7 +427,8 @@ public sealed class IlgpuLifecycleTests
         var genome = Genome<int>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
             [0], [2], Int32ValueSemantics.Instance, functions);
         MemoryBuffer[]? observedBuffers = null;
-        using var evaluator = new IlgpuGenomeEvaluator<int>(
+        var forcedFailure = new InvalidOperationException("falha-sync-int");
+        var evaluator = new IlgpuGenomeEvaluator<int>(
             functions,
             fallback: null,
             selectionOverride: selection,
@@ -417,15 +436,31 @@ public sealed class IlgpuLifecycleTests
             acceleratorFactory: null,
             beforeKernelExecution: null,
             launchInvoker: null,
-            synchronizeInvoker: _ => throw new InvalidOperationException("falha-sync-int"),
+            synchronizeInvoker: _ => throw forcedFailure,
             bufferObserver: buffers => observedBuffers = buffers.ToArray());
 
         var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(genome, [1, 2], new int[1]));
-        Assert.Equal("falha-sync-int", error.Message);
+        Assert.Same(forcedFailure, error);
         Assert.NotNull(observedBuffers);
         Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
         Assert.StartsWith("ILGPU", evaluator.Backend);
         Assert.NotEqual("nenhum", evaluator.DeviceName);
+
+        var accelerator = evaluator.InternalAccelerator;
+        var context = evaluator.InternalContext;
+        Assert.NotNull(accelerator);
+        Assert.NotNull(context);
+        Assert.False(accelerator!.IsDisposed);
+        Assert.False(context!.IsDisposed);
+
+        evaluator.Dispose();
+        Assert.True(accelerator.IsDisposed);
+        Assert.True(context.IsDisposed);
+
+        // Descarte repetido deve ser idempotente.
+        evaluator.Dispose();
+        Assert.True(accelerator.IsDisposed);
+        Assert.True(context.IsDisposed);
     }
 
     [Fact]

@@ -666,14 +666,14 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
                 if (x0 < x1) return x0;
                 if (x1 < x0) return x1;
                 return x0 == 0.0 && x1 == 0.0
-                    ? (((1.0 / x0) < 0.0) ? x0 : x1)
+                    ? (IsNegativeZeroBit(x0) ? x0 : x1)
                     : x1;
             case OpMax:
                 if (nan) return x0 + x1;
                 if (x0 > x1) return x0;
                 if (x1 > x0) return x1;
                 return x0 == 0.0 && x1 == 0.0
-                    ? (((1.0 / x0) < 0.0) ? x1 : x0)
+                    ? (IsNegativeZeroBit(x0) ? x1 : x0)
                     : x1;
             case OpGreaterThan:
                 if (nan) return x0 + x1;
@@ -682,6 +682,10 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             default: return 0.0;
         }
     }
+
+    // Detecta o sinal de um zero via reinterpretação de bits (sem divisão), evitando o
+    // intrínseco RcpF (1.0/x0) que o backend ILGPU/OpenCL 1.2.0 não implementa.
+    private static bool IsNegativeZeroBit(double x) => BitConverter.DoubleToInt64Bits(x) < 0L;
 
     private string DescribeFallback(string? reason)
     {

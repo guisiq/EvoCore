@@ -2,6 +2,9 @@ using Evo.Core;
 using Evo.Core.Functions;
 using Evo.Core.Values;
 using Evo.Ilgpu;
+using ILGPU;
+using ILGPU.Runtime;
+using ILGPU.Runtime.OpenCL;
 using Xunit;
 
 namespace Evo.Ilgpu.Tests;
@@ -291,5 +294,109 @@ public sealed class IlgpuParityTests
         {
             IlgpuTestHelpers.AssertDoubleClose(expected[i], actual[i], $"output {i}");
         }
+    }
+
+    [Fact]
+    public void OpenCl_device_loads_and_executes_min_max_signed_zero_and_non_finite_without_cpu_fallback()
+    {
+        using var probeContext = Context.Create(builder => builder.OpenCL());
+        var clDevices = probeContext.Devices.OfType<CLDevice>().ToArray();
+        if (clDevices.Length == 0)
+        {
+            return;
+        }
+
+        var device = clDevices[0];
+        var selection = new IlgpuBackendSelection(
+            IlgpuBackendKind.OpenClDevice,
+            Array.IndexOf(probeContext.Devices.ToArray(), (ILGPU.Runtime.Device)device),
+            device.Name,
+            null,
+            device.WarpSize,
+            device.MaxNumThreads,
+            device.NumMultiprocessors,
+            device.MaxNumThreadsPerGroup,
+            CpuNumThreads: 0,
+            PlatformName: device.PlatformName,
+            PlatformId: device.PlatformId.ToString(),
+            OpenClDeviceId: device.DeviceId.ToString());
+
+        foreach (var (functions, buildGenome, inputs, assertActual) in new (
+            IFunctionSet<double> functions,
+            Func<IFunctionSet<double>, Genome<double>> buildGenome,
+            double[] inputs,
+            Action<double[], double[]> assertActual)[]
+        {
+            (
+                StandardDoubleFunctionSet.Instance,
+                fs =>
+                {
+                    var minId = IlgpuTestHelpers.FindFunctionId(fs, "min");
+                    var maxId = IlgpuTestHelpers.FindFunctionId(fs, "max");
+                    var shape = new GenomeShape(InputCount: 2, NodeCount: 2, OutputCount: 2, MaxArity: 2, LevelsBack: 2);
+                    return Genome<double>.FromGenes(shape, [minId, maxId], [0, 1, 1, 0], [0.0, 0.0], [2, 3], DoubleValueSemantics.Instance, fs);
+                },
+                [-0.0, 0.0],
+                (expected, actual) =>
+                {
+                    Assert.Equal(unchecked((long)0x8000000000000000), BitConverter.DoubleToInt64Bits(actual[0]));
+                    Assert.Equal(0L, BitConverter.DoubleToInt64Bits(actual[1]));
+                }
+            ),
+            (
+                StandardDoubleFunctionSet.Instance,
+                fs =>
+                {
+                    var constId = IlgpuTestHelpers.FindFunctionId(fs, "const");
+                    var shape = new GenomeShape(InputCount: 1, NodeCount: 3, OutputCount: 3, MaxArity: 1, LevelsBack: 3);
+                    return Genome<double>.FromGenes(shape, [constId, constId, constId], [0, 0, 0],
+                        [double.NaN, double.PositiveInfinity, double.NegativeInfinity], [1, 2, 3], DoubleValueSemantics.Instance, fs);
+                },
+                [1.0],
+                (expected, actual) =>
+                {
+                    Assert.True(double.IsNaN(actual[0]));
+                    Assert.True(double.IsPositiveInfinity(actual[1]));
+                    Assert.True(double.IsNegativeInfinity(actual[2]));
+                }
+            ),
+        })
+        {
+            var genome = buildGenome(functions);
+            var expected = new double[genome.Shape.OutputCount];
+            var actual = new double[genome.Shape.OutputCount];
+            new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+
+            using var evaluator = new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ => Context.Create(builder => builder.OpenCL()),
+                acceleratorFactory: null,
+                beforeKernelExecution: null);
+
+            evaluator.Evaluate(genome, inputs, actual);
+
+            Assert.Equal("ILGPU/OpenCL", evaluator.Backend);
+            Assert.Null(evaluator.LastFallbackReason);
+            assertActual(expected, actual);
+        }
+
+        // Paridade inteira no mesmo dispositivo OpenCL, sem fallback para CPU.
+        var intFunctions = StandardInt32FunctionSet.Instance;
+        var addId = IlgpuTestHelpers.FindFunctionId(intFunctions, "add");
+        var intShape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var intGenome = Genome<int>.FromGenes(intShape, [addId], [0, 1], [0], [2], Int32ValueSemantics.Instance, intFunctions);
+        using var intEvaluator = new IlgpuGenomeEvaluator<int>(
+            intFunctions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: _ => Context.Create(builder => builder.OpenCL()),
+            acceleratorFactory: null,
+            beforeKernelExecution: null);
+        var intActual = new int[1];
+        intEvaluator.Evaluate(intGenome, [1, 2], intActual);
+        Assert.Equal("ILGPU/OpenCL", intEvaluator.Backend);
+        Assert.Equal(3, intActual[0]);
     }
 }
