@@ -158,6 +158,9 @@ public sealed class IlgpuDeviceMatrixTests
             new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
             using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
+            IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
             IlgpuTestHelpers.AssertDoubleArrayClose(expected, actual, $"{label} double");
         }
 
@@ -289,6 +292,9 @@ public sealed class IlgpuDeviceMatrixTests
         new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
         using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
         evaluator.Evaluate(genome, inputs, actual);
+        IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+        Assert.Equal(selection.BackendName, evaluator.Backend);
+        Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
 
         for (var i = 0; i < 4; i++)
         {
