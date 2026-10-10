@@ -188,6 +188,31 @@ public sealed class IlgpuLifecycleTests
     }
 
     [Fact]
+    public void Construction_failure_with_out_of_memory_still_releases_context_and_rethrows_original()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var selection = CpuSelection();
+        Context? createdContext = null;
+
+        var thrown = Assert.Throws<OutOfMemoryException>(() =>
+            new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ =>
+                {
+                    createdContext = Context.Create(builder => builder.CPU());
+                    return createdContext;
+                },
+                acceleratorFactory: static (_, _) => throw new OutOfMemoryException("sem-memoria"),
+                beforeKernelExecution: null));
+
+        Assert.Equal("sem-memoria", thrown.Message);
+        Assert.NotNull(createdContext);
+        Assert.True(createdContext!.IsDisposed);
+    }
+
+    [Fact]
     public void Context_exposes_no_cuda_devices()
     {
         var functions = StandardDoubleArrayFunctionSet.Instance;

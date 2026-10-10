@@ -101,6 +101,14 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
                 ReleaseDevice();
                 _unavailableReason = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
             }
+            catch
+            {
+                // Qualquer acelerador/contexto parcialmente construído (incluindo OutOfMemoryException,
+                // que não cai no fallback acima de propósito) precisa ser liberado antes de propagar a
+                // exceção original sem mascará-la como fallback bem-sucedido.
+                ReleaseDevice();
+                throw;
+            }
         }
 
         if (_accelerator is null)
