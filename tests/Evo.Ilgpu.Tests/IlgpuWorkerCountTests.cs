@@ -304,6 +304,73 @@ public sealed class IlgpuWorkerCountTests
     }
 
     [Fact]
+    public void Worker_init_out_of_memory_also_raises_explicit_error_for_every_worker_sharing_the_selection()
+    {
+        // Reparo-r13 (achado 1 de review-r12): uma OutOfMemoryException na inicialização de um worker
+        // preserva a exceção original (não é substituída por IlgpuBackendInitializationException), mas
+        // ainda precisa registrar a falha compartilhada em IlgpuBackendSelector; caso contrário outro
+        // worker com a mesma seleção poderia construir e avaliar com sucesso depois dessa falha,
+        // divergindo de 06-v2-ilgpu-backend.md decisão 2.
+        var (context, selection) = CreatePrivateCpuSelection();
+        using var _ = context;
+        IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        try
+        {
+            // Worker 1: constrói e avalia com sucesso antes de qualquer falha ser reportada.
+            var healthy = new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance, fallback: null, selectionOverride: selection,
+                contextFactory: _ => context, acceleratorFactory: null, beforeKernelExecution: null);
+            var healthyAccelerator = healthy.InternalAccelerator;
+            Assert.NotNull(healthyAccelerator);
+            var genome = ProtectedLogGenome(StandardDoubleFunctionSet.Instance);
+            var inputs = new[] { 7.0, 1.0 };
+            var output = new double[1];
+            healthy.Evaluate(genome, inputs, output);
+
+            // Worker 2: a inicialização do acelerador lança OutOfMemoryException. A exceção original deve
+            // propagar sem ser substituída, com o contexto parcial liberado.
+            Context? partialContext = null;
+            var oomFailure = Assert.Throws<OutOfMemoryException>(() => new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ => partialContext = Context.Create(builder => builder.CPU()),
+                acceleratorFactory: (_, _) => throw new OutOfMemoryException("oom-init-worker-controlada"),
+                beforeKernelExecution: null));
+            Assert.Equal("oom-init-worker-controlada", oomFailure.Message);
+            Assert.NotNull(partialContext);
+            Assert.True(partialContext!.IsDisposed);
+
+            // Worker 1, já inicializado com sucesso, precisa falhar de forma explícita em três tentativas
+            // posteriores: a falha da OOM do worker 2 também é compartilhada, assim como qualquer outra
+            // falha de inicialização.
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var repeatedFailure = Assert.Throws<IlgpuBackendInitializationException>(
+                    () => healthy.Evaluate(genome, inputs, output));
+                Assert.Equal(healthy.WorkerId, repeatedFailure.WorkerId);
+                Assert.Equal(selection.BackendName, repeatedFailure.Backend);
+                Assert.Contains("oom-init-worker-controlada", repeatedFailure.Cause);
+            }
+
+            Assert.True(healthyAccelerator!.IsDisposed);
+
+            // Worker 3, criado depois, também deve falhar explicitamente em vez de convergir silenciosamente.
+            var thirdWorkerFailure = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance, fallback: null, selectionOverride: selection,
+                contextFactory: _ => context, acceleratorFactory: null, beforeKernelExecution: null));
+            Assert.Equal(selection.BackendName, thirdWorkerFailure.Backend);
+            Assert.Contains("oom-init-worker-controlada", thirdWorkerFailure.Cause);
+
+            healthy.Dispose();
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
+    }
+
+    [Fact]
     public void Backend_selector_skips_kernel_probe_failure_and_uses_next_candidate()
     {
         var openClBroken = new IlgpuBackendSelection(

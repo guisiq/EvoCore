@@ -157,12 +157,17 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
                 IlgpuBackendSelector.ReportInitializationFailure(_selection, cause);
                 throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, cause);
             }
-            catch
+            catch (Exception ex)
             {
                 // Qualquer acelerador/contexto parcialmente construído (incluindo OutOfMemoryException,
                 // que não cai no fallback acima de propósito) precisa ser liberado antes de propagar a
-                // exceção original sem mascará-la como fallback bem-sucedido.
+                // exceção original sem mascará-la como fallback bem-sucedido. Mesmo quando a exceção
+                // original é preservada sem ser substituída (por exemplo OutOfMemoryException), a falha
+                // compartilhada precisa ser registrada: caso contrário outro worker com a mesma seleção
+                // poderia construir com sucesso depois desta falha, divergindo do worker=06 decisão 2.
                 ReleaseDevice();
+                var cause = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}: {ex.Message}";
+                IlgpuBackendSelector.ReportInitializationFailure(_selection, cause);
                 throw;
             }
         }
