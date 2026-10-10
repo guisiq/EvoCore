@@ -182,14 +182,14 @@ public sealed class IlgpuLifecycleTests
     }
 
     [Fact]
-    public void Construction_failure_releases_partial_context_and_falls_back_with_cause()
+    public void Construction_failure_releases_partial_context_and_propagates_explicit_error()
     {
         var functions = StandardDoubleFunctionSet.Instance;
         var selection = CpuSelection();
         Context? createdContext = null;
         try
         {
-            using var evaluator = new IlgpuGenomeEvaluator<double>(
+            var thrown = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
                 functions,
                 fallback: null,
                 selectionOverride: selection,
@@ -199,13 +199,12 @@ public sealed class IlgpuLifecycleTests
                     return createdContext;
                 },
                 acceleratorFactory: static (_, _) => throw new InvalidOperationException("falha-forcada"),
-                beforeKernelExecution: null);
+                beforeKernelExecution: null));
 
             Assert.NotNull(createdContext);
             Assert.True(createdContext!.IsDisposed);
-            Assert.Equal("CPU fallback", evaluator.Backend);
-            Assert.Equal("nenhum", evaluator.DeviceName);
-            Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+            Assert.Equal(selection.BackendName, thrown.Backend);
+            Assert.Contains("InvalidOperationException", thrown.Cause);
         }
         finally
         {
@@ -268,46 +267,58 @@ public sealed class IlgpuLifecycleTests
     }
 
     [Fact]
-    public void Evaluator_rechecks_device_identity_in_new_context_and_falls_back_when_it_changes()
+    public void Evaluator_rechecks_device_identity_in_new_context_and_raises_explicit_error_when_it_changes()
     {
         var functions = StandardDoubleFunctionSet.Instance;
         var selection = CpuSelection() with { DeviceName = "dispositivo-inexistente" };
-        using var evaluator = new IlgpuGenomeEvaluator<double>(
-            functions,
-            fallback: null,
-            selectionOverride: selection,
-            contextFactory: _ => Context.Create(builder => builder.CPU()),
-            acceleratorFactory: null,
-            beforeKernelExecution: null);
+        try
+        {
+            var thrown = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ => Context.Create(builder => builder.CPU()),
+                acceleratorFactory: null,
+                beforeKernelExecution: null));
 
-        Assert.Equal("CPU fallback", evaluator.Backend);
-        Assert.Equal("nenhum", evaluator.DeviceName);
-        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+            Assert.Equal(selection.BackendName, thrown.Backend);
+            Assert.Contains("InvalidOperationException", thrown.Cause);
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
     }
 
     [Fact]
-    public void Evaluator_falls_back_when_device_capabilities_diverge_from_selection()
+    public void Evaluator_raises_explicit_error_when_device_capabilities_diverge_from_selection()
     {
         var functions = StandardDoubleFunctionSet.Instance;
         var real = CpuSelection();
         // Capacidades divergentes da sondagem original: a reprodução reportada seleciona
         // NumThreads=16/WarpSize=4 e reinicializa com NumThreads=1024/WarpSize=32.
         var mismatched = real with { WarpSize = real.WarpSize + 1, MaxNumThreads = real.MaxNumThreads + 1 };
-        using var evaluator = new IlgpuGenomeEvaluator<double>(
-            functions,
-            fallback: null,
-            selectionOverride: mismatched,
-            contextFactory: _ => Context.Create(builder => builder.CPU()),
-            acceleratorFactory: null,
-            beforeKernelExecution: null);
+        try
+        {
+            var thrown = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: mismatched,
+                contextFactory: _ => Context.Create(builder => builder.CPU()),
+                acceleratorFactory: null,
+                beforeKernelExecution: null));
 
-        Assert.Equal("CPU fallback", evaluator.Backend);
-        Assert.Equal("nenhum", evaluator.DeviceName);
-        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+            Assert.Equal(mismatched.BackendName, thrown.Backend);
+            Assert.Contains("InvalidOperationException", thrown.Cause);
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(mismatched);
+        }
     }
 
     [Fact]
-    public void Evaluator_falls_back_when_device_configuration_diverges_with_same_aggregate_capabilities()
+    public void Evaluator_raises_explicit_error_when_device_configuration_diverges_with_same_aggregate_capabilities()
     {
         var functions = StandardDoubleFunctionSet.Instance;
         var baseSelection = new IlgpuBackendSelection(
@@ -320,17 +331,23 @@ public sealed class IlgpuLifecycleTests
             NumMultiprocessors: 4,
             MaxNumThreadsPerGroup: 4,
             CpuNumThreads: 16);
-        using var evaluator = new IlgpuGenomeEvaluator<double>(
-            functions,
-            fallback: null,
-            selectionOverride: baseSelection,
-            contextFactory: _ => Context.Create(builder => builder.CPU(new CPUDevice(4, 2, 2))),
-            acceleratorFactory: null,
-            beforeKernelExecution: null);
+        try
+        {
+            var thrown = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: baseSelection,
+                contextFactory: _ => Context.Create(builder => builder.CPU(new CPUDevice(4, 2, 2))),
+                acceleratorFactory: null,
+                beforeKernelExecution: null));
 
-        Assert.Equal("CPU fallback", evaluator.Backend);
-        Assert.Equal("nenhum", evaluator.DeviceName);
-        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+            Assert.Equal(baseSelection.BackendName, thrown.Backend);
+            Assert.Contains("InvalidOperationException", thrown.Cause);
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(baseSelection);
+        }
     }
 
     [Fact]

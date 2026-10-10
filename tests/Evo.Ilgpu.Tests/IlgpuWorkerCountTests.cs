@@ -232,47 +232,62 @@ public sealed class IlgpuWorkerCountTests
         return (context, selection);
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public void One_worker_device_init_failure_forces_cpu_fallback_for_all_workers_sharing_the_selection(int workerCount)
+    [Fact]
+    public void One_worker_device_init_failure_after_selection_raises_explicit_error_for_every_worker_sharing_it()
     {
+        // 06-v2-ilgpu-backend.md decisão 2: uma falha de inicialização depois da seleção compartilhada nunca
+        // converge silenciosamente para o fallback de CPU; a avaliação falha de forma explícita, identificando
+        // worker, backend e causa, e a execução nunca continua com backends efetivos diferentes entre workers.
         var (context, selection) = CreatePrivateCpuSelection();
         using var _ = context;
-        var functions = StandardDoubleFunctionSet.Instance;
-        var genome = ProtectedLogGenome(functions);
-        var inputs = new[] { 7.0, 1.0 };
-
-        // Worker 0 falha a inicialização do dispositivo depois da mesma seleção compartilhada.
-        using (var failing = new IlgpuGenomeEvaluator<double>(
-            functions,
-            fallback: null,
-            selectionOverride: selection,
-            contextFactory: _ => Context.Create(builder => builder.CPU()),
-            acceleratorFactory: (_, _) => throw new InvalidOperationException("falha-init-worker-controlada"),
-            beforeKernelExecution: null))
+        IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        try
         {
-            var output = new double[1];
-            failing.Evaluate(genome, inputs, output);
-            Assert.Equal("CPU fallback", failing.Backend);
-        }
-
-        var backends = new string[workerCount];
-        var devices = new string[workerCount];
-        for (var w = 0; w < workerCount; w++)
-        {
-            using var evaluator = new IlgpuGenomeEvaluator<double>(
-                functions, fallback: null, selectionOverride: selection,
+            // Worker 1: constrói com sucesso (sem falha ainda) para provar que seus recursos são liberados
+            // quando um worker posterior da mesma seleção falhar.
+            var healthy = new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance, fallback: null, selectionOverride: selection,
                 contextFactory: _ => context, acceleratorFactory: null, beforeKernelExecution: null);
-            var output = new double[1];
-            evaluator.Evaluate(genome, inputs, output);
-            backends[w] = evaluator.Backend;
-            devices[w] = evaluator.DeviceName;
-        }
+            var healthyAccelerator = healthy.InternalAccelerator;
+            Assert.NotNull(healthyAccelerator);
 
-        Assert.All(backends, backend => Assert.Equal("CPU fallback", backend));
-        Assert.All(devices, device => Assert.Equal("nenhum", device));
+            // Worker 2: falha a inicialização do dispositivo depois da mesma seleção compartilhada. A falha
+            // deve propagar um erro explícito, identificando worker, backend e causa, liberando os recursos
+            // parciais, em vez de continuar com sucesso por fallback de CPU.
+            var failure = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ => Context.Create(builder => builder.CPU()),
+                acceleratorFactory: (_, _) => throw new InvalidOperationException("falha-init-worker-controlada"),
+                beforeKernelExecution: null));
+            Assert.Contains("InvalidOperationException", failure.Cause);
+            Assert.Equal(selection.BackendName, failure.Backend);
+
+            // Worker 1, que já havia inicializado com sucesso, também precisa falhar de forma explícita ao
+            // avaliar depois da falha reportada por worker 2: a execução nunca mistura backends efetivos.
+            var genome = ProtectedLogGenome(StandardDoubleFunctionSet.Instance);
+            var inputs = new[] { 7.0, 1.0 };
+            var output = new double[1];
+            var evaluateFailure = Assert.Throws<IlgpuBackendInitializationException>(
+                () => healthy.Evaluate(genome, inputs, output));
+            Assert.Equal(healthy.WorkerId, evaluateFailure.WorkerId);
+            Assert.NotEqual(failure.WorkerId, evaluateFailure.WorkerId);
+            Assert.Equal(selection.BackendName, evaluateFailure.Backend);
+            Assert.True(healthyAccelerator!.IsDisposed);
+
+            // Worker 3, criado depois, também deve falhar explicitamente em vez de convergir silenciosamente.
+            var thirdWorkerFailure = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                StandardDoubleFunctionSet.Instance, fallback: null, selectionOverride: selection,
+                contextFactory: _ => context, acceleratorFactory: null, beforeKernelExecution: null));
+            Assert.Equal(selection.BackendName, thirdWorkerFailure.Backend);
+
+            healthy.Dispose();
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
     }
 
     [Fact]

@@ -12,6 +12,33 @@ using Evo.Core.Values;
 namespace Evo.Ilgpu;
 
 /// <summary>
+/// Raised when a worker fails to initialize the backend/device that the process-wide selection already resolved
+/// for the current run, or when a worker is created after another worker reported that same failure. Per
+/// <c>06-v2-ilgpu-backend.md</c> decision 2, a failure after the initial selection never falls back silently: the
+/// evaluation fails explicitly identifying the worker, the attempted backend and the cause, so the run never
+/// continues with different effective backends across workers.
+/// </summary>
+public sealed class IlgpuBackendInitializationException : Exception
+{
+    /// <summary>Identifier of the worker (evaluator instance) that observed the failure.</summary>
+    public long WorkerId { get; }
+
+    /// <summary>Backend name that was attempted (for example, <c>ILGPU/OpenCL</c> or <c>ILGPU/CPU</c>).</summary>
+    public string Backend { get; }
+
+    /// <summary>Underlying cause reported by the failing worker or by the worker that first observed it.</summary>
+    public string Cause { get; }
+
+    internal IlgpuBackendInitializationException(long workerId, string backend, string cause)
+        : base($"worker {workerId}: falha ao inicializar {backend} depois da seleção compartilhada: {cause}")
+    {
+        WorkerId = workerId;
+        Backend = backend;
+        Cause = cause;
+    }
+}
+
+/// <summary>
 /// ILGPU evaluator of one genome for one case. Supports <c>double</c>, <c>int</c>, <c>double[]</c> and <c>int[]</c>
 /// with the standard function sets. The active DAG is lowered to an opcode program executed by an ILGPU kernel;
 /// array operands are element lanes (each lane runs the same program on one element). Anything the kernel does not
@@ -52,6 +79,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private bool _disposed;
     private Action<Index1D, ArrayView<int>, ArrayView<double>, ArrayView<double>, ArrayView<int>, ArrayView<double>, ArrayView<int>, int, int>? _doubleKernel;
     private Action<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>? _intKernel;
+    private static long _workerCounter;
 
     /// <summary>Creates an evaluator using the process-wide ILGPU selection.</summary>
     /// <param name="functions">Function set; only the standard sets for the supported types run on the device.</param>
@@ -73,6 +101,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         Action<MemoryBuffer[]>? bufferObserver = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
+        WorkerId = System.Threading.Interlocked.Increment(ref _workerCounter);
         _functions = functions;
         _fallback = fallback ?? CreateDefaultFallback(functions);
         _selection = selectionOverride ?? IlgpuBackendSelector.Selection;
@@ -100,6 +129,14 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         {
             _unavailableReason = _selection.FallbackReason;
         }
+        else if (IlgpuBackendSelector.TryGetForcedFallbackReason(_selection, out var priorFailureReason))
+        {
+            // Outro worker com a mesma seleção já falhou ao inicializar o backend/dispositivo depois da
+            // escolha compartilhada. Por 06-v2-ilgpu-backend.md decisão 2, a execução nunca continua com
+            // backends efetivos diferentes entre workers: este worker também falha de forma explícita,
+            // em vez de convergir silenciosamente para o fallback de CPU.
+            throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, priorFailureReason);
+        }
         else
         {
             try
@@ -109,8 +146,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 ReleaseDevice();
-                _unavailableReason = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
-                IlgpuBackendSelector.ReportInitializationFailure(_selection, _unavailableReason);
+                var cause = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
+                IlgpuBackendSelector.ReportInitializationFailure(_selection, cause);
+                throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, cause);
             }
             catch
             {
@@ -129,6 +167,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             LastFallbackReason = _unavailableReason;
         }
     }
+
+    /// <summary>Identifier of this worker/evaluator instance, used in explicit initialization-failure messages.</summary>
+    public long WorkerId { get; }
 
     /// <summary>Internal handles used by tests to prove resource release.</summary>
     internal Accelerator? InternalAccelerator => _accelerator;
@@ -166,10 +207,11 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         if (_accelerator is not null && IlgpuBackendSelector.TryGetForcedFallbackReason(_selection, out var forcedReason))
         {
             // Outro worker com a mesma seleção falhou ao inicializar o dispositivo depois da escolha comum.
-            // Para não misturar backends efetivos entre workers da mesma execução, este avaliador também
-            // converge para CPU fallback a partir daqui, liberando o acelerador que já havia inicializado.
+            // Por 06-v2-ilgpu-backend.md decisão 2, a avaliação falha de forma explícita em vez de convergir
+            // silenciosamente para o fallback de CPU: a execução nunca continua com backends efetivos
+            // diferentes entre workers.
             ReleaseDevice();
-            _unavailableReason = forcedReason;
+            throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, forcedReason);
         }
 
         string? reason = _disposed ? "avaliador descartado" : _unavailableReason;

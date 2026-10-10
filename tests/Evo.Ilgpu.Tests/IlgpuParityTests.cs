@@ -6,11 +6,19 @@ using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.OpenCL;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Evo.Ilgpu.Tests;
 
 public sealed class IlgpuParityTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public IlgpuParityTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     private static readonly GenomeShape RandomShape = new(InputCount: 2, NodeCount: 8, OutputCount: 2, MaxArity: 3, LevelsBack: 8);
 
     private static Genome<double> RandomDouble(ulong seed, IFunctionSet<double> functions)
@@ -297,12 +305,30 @@ public sealed class IlgpuParityTests
     }
 
     [Fact]
+    public void OpenCl_unavailable_branch_is_recorded_as_unavailable_not_as_approved()
+    {
+        // 06-v2-ilgpu-backend.md decisão 5: regressão controlada do ramo sem runtime/dispositivo OpenCL,
+        // sem depender de hardware ausente na máquina de execução.
+        var selection = IlgpuBackendSelector.ProbeForTests(
+            static () => throw new System.IO.FileNotFoundException("runtime-opencl-ausente"),
+            static (_, _) => throw new System.Diagnostics.UnreachableException());
+
+        Assert.NotEqual(IlgpuBackendKind.OpenClDevice, selection.Kind);
+        Assert.Equal(IlgpuBackendKind.CpuFallback, selection.Kind);
+        Assert.Contains("FileNotFoundException", selection.FallbackReason);
+        _output.WriteLine($"OpenCL indisponível (regressão controlada): causa={selection.FallbackReason}");
+    }
+
+    [Fact]
     public void OpenCl_device_loads_and_executes_min_max_signed_zero_and_non_finite_without_cpu_fallback()
     {
         using var probeContext = Context.Create(builder => builder.OpenCL());
         var clDevices = probeContext.Devices.OfType<CLDevice>().ToArray();
         if (clDevices.Length == 0)
         {
+            // 06-v2-ilgpu-backend.md decisão 5: sem dispositivo OpenCL real, o teste registra a
+            // indisponibilidade com a causa e não é contado como aprovado para o ramo OpenCL.
+            _output.WriteLine("OpenCL indisponível nesta máquina: nenhum CLDevice enumerado pelo runtime ILGPU; ramo OpenCL não exercitado nesta execução.");
             return;
         }
 
