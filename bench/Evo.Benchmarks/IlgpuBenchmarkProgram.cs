@@ -259,13 +259,23 @@ internal static class IlgpuBenchmarkProgram
 
     private static void AssertDouble(double expected, double actual)
     {
-        if (double.IsFinite(expected) != double.IsFinite(actual))
+        if (double.IsNaN(expected) || double.IsNaN(actual))
         {
-            throw new InvalidOperationException($"paridade double falhou: esperado {expected}, atual {actual}");
+            if (!(double.IsNaN(expected) && double.IsNaN(actual)))
+            {
+                throw new InvalidOperationException($"paridade double falhou: esperado {expected}, atual {actual}");
+            }
+
+            return;
         }
 
-        if (!double.IsFinite(expected))
+        if (double.IsInfinity(expected) || double.IsInfinity(actual))
         {
+            if (expected != actual)
+            {
+                throw new InvalidOperationException($"paridade double falhou: esperado {expected}, atual {actual}");
+            }
+
             return;
         }
 

@@ -22,9 +22,17 @@ internal static class IlgpuTestHelpers
 
     public static void AssertDoubleClose(double expected, double actual, string? because = null)
     {
-        Assert.Equal(double.IsFinite(expected), double.IsFinite(actual));
-        if (!double.IsFinite(expected))
+        if (double.IsNaN(expected) || double.IsNaN(actual))
         {
+            Assert.True(
+                double.IsNaN(expected) && double.IsNaN(actual),
+                because ?? $"esperado {expected}, atual {actual}");
+            return;
+        }
+
+        if (double.IsInfinity(expected) || double.IsInfinity(actual))
+        {
+            Assert.True(expected == actual, because ?? $"esperado {expected}, atual {actual}");
             return;
         }
 
