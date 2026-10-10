@@ -187,23 +187,33 @@ public sealed class IlgpuLifecycleTests
         var functions = StandardDoubleFunctionSet.Instance;
         var selection = CpuSelection();
         Context? createdContext = null;
-        using var evaluator = new IlgpuGenomeEvaluator<double>(
-            functions,
-            fallback: null,
-            selectionOverride: selection,
-            contextFactory: _ =>
-            {
-                createdContext = Context.Create(builder => builder.CPU());
-                return createdContext;
-            },
-            acceleratorFactory: static (_, _) => throw new InvalidOperationException("falha-forcada"),
-            beforeKernelExecution: null);
+        try
+        {
+            using var evaluator = new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: _ =>
+                {
+                    createdContext = Context.Create(builder => builder.CPU());
+                    return createdContext;
+                },
+                acceleratorFactory: static (_, _) => throw new InvalidOperationException("falha-forcada"),
+                beforeKernelExecution: null);
 
-        Assert.NotNull(createdContext);
-        Assert.True(createdContext!.IsDisposed);
-        Assert.Equal("CPU fallback", evaluator.Backend);
-        Assert.Equal("nenhum", evaluator.DeviceName);
-        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+            Assert.NotNull(createdContext);
+            Assert.True(createdContext!.IsDisposed);
+            Assert.Equal("CPU fallback", evaluator.Backend);
+            Assert.Equal("nenhum", evaluator.DeviceName);
+            Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+        }
+        finally
+        {
+            // Esta falha forçada marca a seleção compartilhada (por valor) como caída para CPU fallback em
+            // IlgpuBackendSelector; sem o reset, qualquer outro teste que reutilize CpuSelection() herdaria
+            // esse estado global e passaria a usar fallback silenciosamente em vez do dispositivo real.
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
     }
 
     [Fact]
