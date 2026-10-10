@@ -21,12 +21,14 @@ namespace Evo.Ilgpu.Tests;
 public sealed class IlgpuDagMatrixTests
 {
     // Endereços: input0=0, input1=1; node0(Constant)=2, node1(Add)=3, node2(Add fan-out)=4,
-    // node3(Multiply, argumento repetido addr4,addr4)=5, node4(Subtract, diamante com node3 via addr4)=6,
-    // node5(Add)=7 — nunca referenciado, portanto INATIVO.
-    private static readonly int[] ExpectedActiveAddresses = [2, 3, 4, 5, 6];
-    private static readonly int[] ExpectedInactiveAddresses = [7];
+    // node3(Multiply, argumento repetido addr4,addr4; consumidor 1 do fan-out)=5,
+    // node4(Subtract, addr4-input0; consumidor 2 do fan-out)=6,
+    // node5(Add, addr5+addr6 — DIAMANTE REAL: reconverge os dois consumidores do fan-out addr4)=7,
+    // node6(Add)=8 — nunca referenciado, portanto INATIVO.
+    private static readonly int[] ExpectedActiveAddresses = [2, 3, 4, 5, 6, 7];
+    private static readonly int[] ExpectedInactiveAddresses = [8];
     private const int InputCount = 2;
-    private const int NodeCount = 6;
+    private const int NodeCount = 7;
 
     [Theory]
     [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
@@ -69,10 +71,10 @@ public sealed class IlgpuDagMatrixTests
         var subId = IlgpuTestHelpers.FindFunctionId(functions, "subtract");
         var genome = Genome<double>.FromGenes(
             Shape(5),
-            [constId, addId, addId, mulId, subId, addId],
-            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 0, 1],
-            [5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [3, 5, 6, 5, 1],
+            [constId, addId, addId, mulId, subId, addId, addId],
+            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 5, 6, 0, 1],
+            [5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [3, 7, 6, 7, 1],
             DoubleValueSemantics.Instance,
             functions);
 
@@ -105,10 +107,10 @@ public sealed class IlgpuDagMatrixTests
         var subId = IlgpuTestHelpers.FindFunctionId(functions, "subtract");
         var genome = Genome<int>.FromGenes(
             Shape(5),
-            [constId, addId, addId, mulId, subId, addId],
-            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 0, 1],
-            [5, 0, 0, 0, 0, 0],
-            [3, 5, 6, 5, 1],
+            [constId, addId, addId, mulId, subId, addId, addId],
+            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 5, 6, 0, 1],
+            [5, 0, 0, 0, 0, 0, 0],
+            [3, 7, 6, 7, 1],
             Int32ValueSemantics.Instance,
             functions);
 
@@ -142,10 +144,10 @@ public sealed class IlgpuDagMatrixTests
         var constantParam = new[] { 9.0, -1.0 };
         var genome = Genome<double[]>.FromGenes(
             Shape(5),
-            [constId, addId, addId, mulId, subId, addId],
-            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 0, 1],
-            [constantParam, [], [], [], [], []],
-            [3, 5, 6, 5, 1],
+            [constId, addId, addId, mulId, subId, addId, addId],
+            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 5, 6, 0, 1],
+            [constantParam, [], [], [], [], [], []],
+            [3, 7, 6, 7, 1],
             DoubleArrayValueSemantics.Instance,
             functions);
         var constantParamCopy = (double[])constantParam.Clone();
@@ -188,10 +190,10 @@ public sealed class IlgpuDagMatrixTests
         var constantParam = new[] { 9, -1 };
         var genome = Genome<int[]>.FromGenes(
             Shape(5),
-            [constId, addId, addId, mulId, subId, addId],
-            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 0, 1],
-            [constantParam, [], [], [], [], []],
-            [3, 5, 6, 5, 1],
+            [constId, addId, addId, mulId, subId, addId, addId],
+            [0, 0, 0, 2, 0, 1, 4, 4, 4, 0, 5, 6, 0, 1],
+            [constantParam, [], [], [], [], [], []],
+            [3, 7, 6, 7, 1],
             Int32ArrayValueSemantics.Instance,
             functions);
         var constantParamCopy = (int[])constantParam.Clone();
