@@ -4,6 +4,7 @@ using Evo.Core.Values;
 using Evo.Ilgpu;
 using ILGPU;
 using ILGPU.Runtime;
+using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.OpenCL;
 using Xunit;
 using Xunit.Abstractions;
@@ -319,16 +320,41 @@ public sealed class IlgpuParityTests
         _output.WriteLine($"OpenCL indisponível (regressão controlada): causa={selection.FallbackReason}");
     }
 
+    private void ClassifyOpenClDeviceAvailability(CLDevice[] clDevices)
+    {
+        // Reparo-r12 (achado 2 de review-r11): mesmo ramo de classificação usado pelo teste real
+        // `OpenCl_device_loads_and_executes_min_max_signed_zero_and_non_finite_without_cpu_fallback`,
+        // extraído para ser exercitado também por uma regressão controlada sem depender de hardware ausente.
+        if (clDevices.Length == 0)
+        {
+            const string reason = "OpenCL indisponível nesta máquina: nenhum CLDevice enumerado pelo runtime ILGPU; ramo OpenCL não exercitado nesta execução.";
+            _output.WriteLine(reason);
+            DynamicSkip.If(true, reason);
+        }
+    }
+
     [Fact]
+    public void OpenCl_device_classification_branch_is_dynamically_skipped_when_no_cl_device_is_enumerated()
+    {
+        // Reparo-r12 (achado 2 de review-r11, conclusão de R10-2): regressão controlada do ramo de
+        // classificação do teste real de hardware (não apenas do seletor). Um contexto só-CPU garante
+        // `clDevices.Length == 0` de forma determinística, sem simular ausência de hardware na máquina.
+        using var cpuOnlyContext = Context.Create(builder => builder.CPU());
+        var clDevices = cpuOnlyContext.Devices.OfType<CLDevice>().ToArray();
+        Assert.Empty(clDevices);
+
+        var skip = Assert.Throws<DynamicSkipException>(() => ClassifyOpenClDeviceAvailability(clDevices));
+        Assert.Contains("OpenCL indisponível", skip.Message);
+    }
+
+    [OptionalFact]
     public void OpenCl_device_loads_and_executes_min_max_signed_zero_and_non_finite_without_cpu_fallback()
     {
         using var probeContext = Context.Create(builder => builder.OpenCL());
         var clDevices = probeContext.Devices.OfType<CLDevice>().ToArray();
         if (clDevices.Length == 0)
         {
-            // 06-v2-ilgpu-backend.md decisão 5: sem dispositivo OpenCL real, o teste registra a
-            // indisponibilidade com a causa e não é contado como aprovado para o ramo OpenCL.
-            _output.WriteLine("OpenCL indisponível nesta máquina: nenhum CLDevice enumerado pelo runtime ILGPU; ramo OpenCL não exercitado nesta execução.");
+            ClassifyOpenClDeviceAvailability(clDevices);
             return;
         }
 

@@ -276,6 +276,19 @@ public sealed class IlgpuWorkerCountTests
             Assert.Equal(selection.BackendName, evaluateFailure.Backend);
             Assert.True(healthyAccelerator!.IsDisposed);
 
+            // Reparo-r12 (achado 1 de review-r11): a primeira avaliação posterior já libera o acelerador
+            // parcial via ReleaseDevice(), zerando o handle interno. A decisão 2 de 06-v2-ilgpu-backend.md
+            // exige que a falha compartilhada permaneça explícita em TODAS as tentativas seguintes, nunca
+            // convergindo silenciosamente para sucesso por fallback de CPU assim que o handle é liberado.
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var repeatedFailure = Assert.Throws<IlgpuBackendInitializationException>(
+                    () => healthy.Evaluate(genome, inputs, output));
+                Assert.Equal(healthy.WorkerId, repeatedFailure.WorkerId);
+                Assert.Equal(selection.BackendName, repeatedFailure.Backend);
+                Assert.Contains("falha-init-worker-controlada", repeatedFailure.Cause);
+            }
+
             // Worker 3, criado depois, também deve falhar explicitamente em vez de convergir silenciosamente.
             var thirdWorkerFailure = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
                 StandardDoubleFunctionSet.Instance, fallback: null, selectionOverride: selection,

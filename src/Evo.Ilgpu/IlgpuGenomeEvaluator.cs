@@ -69,6 +69,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private readonly IlgpuBackendSelection _selection;
     private readonly bool _kindSupported;
     private readonly bool _functionSetSupported;
+    private readonly bool _eligibleForDevice;
     private readonly Action? _beforeKernelExecution;
     private readonly Action<Action>? _launchInvoker;
     private readonly Action<Accelerator>? _synchronizeInvoker;
@@ -108,6 +109,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         _kindSupported = typeof(T) == typeof(double) || typeof(T) == typeof(int)
             || typeof(T) == typeof(double[]) || typeof(T) == typeof(int[]);
         _functionSetSupported = IsStandardSetFor(functions);
+        // Workers whose type/function set are not supported, or whose selection already resolved to the
+        // CPU-fallback kind, never attempt the device backend; a shared initialization failure recorded by
+        // another worker does not apply to them. Only workers that would otherwise run on the device must keep
+        // failing explicitly (06-v2-ilgpu-backend.md decision 2), independently of whether their own
+        // accelerator handle was already released by ReleaseDevice() after observing the shared failure.
+        _eligibleForDevice = _kindSupported && _functionSetSupported && _selection.Kind != IlgpuBackendKind.CpuFallback;
         _beforeKernelExecution = beforeKernelExecution;
         _launchInvoker = launchInvoker;
         _synchronizeInvoker = synchronizeInvoker;
@@ -204,12 +211,15 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         LastEvaluationUsedDevice = false;
         LastDeviceExecutionCounts = null;
 
-        if (_accelerator is not null && IlgpuBackendSelector.TryGetForcedFallbackReason(_selection, out var forcedReason))
+        if (_eligibleForDevice && IlgpuBackendSelector.TryGetForcedFallbackReason(_selection, out var forcedReason))
         {
             // Outro worker com a mesma seleção falhou ao inicializar o dispositivo depois da escolha comum.
             // Por 06-v2-ilgpu-backend.md decisão 2, a avaliação falha de forma explícita em vez de convergir
             // silenciosamente para o fallback de CPU: a execução nunca continua com backends efetivos
-            // diferentes entre workers.
+            // diferentes entre workers. A checagem independe de _accelerator ainda estar vivo: depois que
+            // ReleaseDevice() zera o handle na primeira tentativa posterior à falha compartilhada, as
+            // tentativas seguintes deste worker elegível para o dispositivo continuam falhando de forma
+            // explícita, nunca retornando sucesso por fallback de CPU.
             ReleaseDevice();
             throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, forcedReason);
         }
