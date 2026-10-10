@@ -1,5 +1,6 @@
 using ILGPU;
 using ILGPU.Runtime;
+using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.OpenCL;
 
 namespace Evo.Ilgpu;
@@ -53,17 +54,28 @@ public static class IlgpuBackendSelector
         string? openClFailure = null;
         try
         {
-            using var context = Context.Create(builder => builder.Default().OpenCL());
+            using var context = Context.Create(builder => builder.OpenCL().CPU());
             var devices = context.Devices.ToArray();
+            string? unusable = null;
             for (var i = 0; i < devices.Length; i++)
             {
-                if (devices[i].AcceleratorType == AcceleratorType.OpenCL)
+                if (devices[i].AcceleratorType != AcceleratorType.OpenCL)
                 {
+                    continue;
+                }
+
+                try
+                {
+                    using var probe = devices[i].CreateAccelerator(context);
                     return new IlgpuBackendSelection(IlgpuBackendKind.OpenClDevice, i, devices[i].Name, null);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    unusable = $"dispositivo OpenCL '{devices[i].Name}' não inicializável: {ex.GetType().Name}";
                 }
             }
 
-            openClFailure = "nenhum dispositivo OpenCL encontrado pelo runtime ILGPU";
+            openClFailure = unusable ?? "nenhum dispositivo OpenCL encontrado pelo runtime ILGPU";
             for (var i = 0; i < devices.Length; i++)
             {
                 if (devices[i].AcceleratorType.ToString() == "CPU")

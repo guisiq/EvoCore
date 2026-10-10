@@ -1,8 +1,13 @@
 using ILGPU;
 using ILGPU.Runtime;
+using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.OpenCL;
 using Evo.Core;
+using Evo.Core.Compiled;
 using Evo.Core.Functions;
+using Evo.Core.Values;
+
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Evo.Ilgpu.Tests")]
 
 namespace Evo.Ilgpu;
 
@@ -39,17 +44,19 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private readonly bool _functionSetSupported;
     private Context? _context;
     private Accelerator? _accelerator;
+    private string? _unavailableReason;
+    private bool _disposed;
     private Action<Index1D, ArrayView<int>, ArrayView<double>, ArrayView<double>, ArrayView<int>, ArrayView<double>, int, int>? _doubleKernel;
     private Action<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>? _intKernel;
 
     /// <summary>Creates an evaluator using the process-wide ILGPU selection.</summary>
     /// <param name="functions">Function set; only the standard sets for the supported types run on the device.</param>
-    /// <param name="fallback">Evaluator used when the device cannot run the call; defaults to the reference evaluator.</param>
+    /// <param name="fallback">Evaluator used when the device cannot run the call; defaults to the compiled CPU evaluator.</param>
     public IlgpuGenomeEvaluator(IFunctionSet<T> functions, IGenomeEvaluator<T>? fallback = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
         _functions = functions;
-        _fallback = fallback ?? new ReferenceGenomeEvaluator<T>(functions);
+        _fallback = fallback ?? CreateDefaultFallback(functions);
         _selection = IlgpuBackendSelector.Selection;
         _kindSupported = typeof(T) == typeof(double) || typeof(T) == typeof(int)
             || typeof(T) == typeof(double[]) || typeof(T) == typeof(int[]);
@@ -58,33 +65,44 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         Backend = _selection.BackendName;
         DeviceName = _selection.DeviceName;
 
-        if (_kindSupported && _functionSetSupported && _selection.Kind != IlgpuBackendKind.CpuFallback)
+        if (!_kindSupported)
         {
-            _context = Context.Create(builder => builder.Default().OpenCL());
-            _accelerator = _context.Devices[_selection.DeviceIndex].CreateAccelerator(_context);
-            if (typeof(T) == typeof(double) || typeof(T) == typeof(double[]))
-            {
-                _doubleKernel = _accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<double>, ArrayView<double>, ArrayView<int>, ArrayView<double>, int, int>(DoubleKernel);
-            }
-            else
-            {
-                _intKernel = _accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>(IntKernel);
-            }
+            _unavailableReason = $"tipo {typeof(T).Name} não suportado pelo backend ILGPU";
+        }
+        else if (!_functionSetSupported)
+        {
+            _unavailableReason = "conjunto de funções não padrão";
+        }
+        else if (_selection.Kind == IlgpuBackendKind.CpuFallback)
+        {
+            _unavailableReason = _selection.FallbackReason;
         }
         else
         {
-            Backend = "CPU fallback";
-            DeviceName = "nenhum";
-            if (!_kindSupported)
+            try
             {
-                LastFallbackReason = $"tipo {typeof(T).Name} não suportado pelo backend ILGPU";
+                InitializeDevice();
             }
-            else if (!_functionSetSupported)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                LastFallbackReason = "conjunto de funções não padrão";
+                ReleaseDevice();
+                _unavailableReason = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
             }
         }
+
+        if (_accelerator is null)
+        {
+            Backend = "CPU fallback";
+            DeviceName = "nenhum";
+            LastFallbackReason = _unavailableReason;
+        }
     }
+
+    /// <summary>Internal handles used by tests to prove resource release.</summary>
+    internal Accelerator? InternalAccelerator => _accelerator;
+
+    /// <summary>Internal handles used by tests to prove resource release.</summary>
+    internal Context? InternalContext => _context;
 
     /// <summary>Effective backend of the last call (ILGPU/OpenCL, ILGPU/CPU or CPU fallback).</summary>
     public string Backend { get; private set; }
@@ -102,32 +120,99 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         var inputArray = inputs.ToArray();
         var outputArray = new T[outputs.Length];
 
-        string? reason = null;
-        if (_accelerator is null || !TryEvaluateOnDevice(genome, inputArray, outputArray, out reason))
+        string? reason = _disposed ? "avaliador descartado" : _unavailableReason;
+        if (_accelerator is not null && TryEvaluateOnDevice(genome, inputArray, outputArray, out reason))
         {
-            if (_accelerator is not null)
-            {
-                LastFallbackReason = reason;
-            }
-
-            Backend = "CPU fallback";
-            _fallback.Evaluate(genome, inputArray, outputArray);
+            Backend = _selection.BackendName;
+            DeviceName = _selection.DeviceName;
+            LastFallbackReason = _selection.FallbackReason;
         }
         else
         {
-            Backend = _selection.BackendName;
-            LastFallbackReason = _selection.FallbackReason;
+            Backend = "CPU fallback";
+            DeviceName = "nenhum";
+            LastFallbackReason = reason ?? "backend indisponível";
+            _fallback.Evaluate(genome, inputArray, outputArray);
         }
 
         outputArray.CopyTo(outputs);
     }
 
     /// <inheritdoc />
+    /// <remarks>Releases the accelerator before its context; repeated calls are no-ops. Exceptions are not masked.</remarks>
     public void Dispose()
     {
-        _context?.Dispose();
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        ReleaseDevice();
+    }
+
+    private void InitializeDevice()
+    {
+        var kind = _selection.Kind;
+        var context = Context.Create(builder =>
+        {
+            if (kind == IlgpuBackendKind.OpenClDevice)
+            {
+                builder.OpenCL();
+            }
+            else
+            {
+                builder.CPU();
+            }
+        });
+        _context = context;
+
+        var devices = context.Devices.ToArray();
+        var index = _selection.DeviceIndex;
+        if (index < 0 || index >= devices.Length || devices[index].Name != _selection.DeviceName)
+        {
+            throw new InvalidOperationException($"dispositivo '{_selection.DeviceName}' não reconhecido no novo contexto");
+        }
+
+        _accelerator = devices[index].CreateAccelerator(context);
+        if (typeof(T) == typeof(double) || typeof(T) == typeof(double[]))
+        {
+            _doubleKernel = _accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<double>, ArrayView<double>, ArrayView<int>, ArrayView<double>, int, int>(DoubleKernel);
+        }
+        else
+        {
+            _intKernel = _accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>(IntKernel);
+        }
+    }
+
+    private void ReleaseDevice()
+    {
+        var accelerator = _accelerator;
+        var context = _context;
         _accelerator = null;
         _context = null;
+        _doubleKernel = null;
+        _intKernel = null;
+        try
+        {
+            accelerator?.Dispose();
+        }
+        finally
+        {
+            context?.Dispose();
+        }
+    }
+
+    private static IGenomeEvaluator<T> CreateDefaultFallback(IFunctionSet<T> functions)
+    {
+        object? values = typeof(T) == typeof(double) ? DoubleValueSemantics.Instance
+            : typeof(T) == typeof(int) ? Int32ValueSemantics.Instance
+            : typeof(T) == typeof(double[]) ? DoubleArrayValueSemantics.Instance
+            : typeof(T) == typeof(int[]) ? Int32ArrayValueSemantics.Instance
+            : null;
+        return values is null
+            ? new ReferenceGenomeEvaluator<T>(functions)
+            : new CompiledGenomeEvaluator<T>(functions, (IValueSemantics<T>)values);
     }
 
     private static bool IsStandardSetFor(IFunctionSet<T> functions)
@@ -172,6 +257,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             if (lanes < 0)
             {
                 reason = "genoma de array sem entradas de comprimento definido";
+                return false;
+            }
+
+            if (lanes == 0)
+            {
+                reason = "arrays vazios não são executados no kernel; fallback CPU preserva a semântica";
                 return false;
             }
         }
