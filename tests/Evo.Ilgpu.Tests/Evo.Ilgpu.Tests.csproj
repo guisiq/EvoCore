@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Evo.Core\Evo.Core.csproj" />
     <ProjectReference Include="..\..\src\Evo.Ilgpu\Evo.Ilgpu.csproj" />
+    <ProjectReference Include="..\..\bench\Evo.Benchmarks\Evo.Benchmarks.csproj" />
   </ItemGroup>
 
 </Project>

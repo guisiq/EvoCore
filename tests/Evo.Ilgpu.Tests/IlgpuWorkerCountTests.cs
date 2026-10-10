@@ -198,4 +198,65 @@ public sealed class IlgpuWorkerCountTests
             Assert.True(context.IsDisposed);
         }
     }
+
+    [Fact]
+    public void Backend_selector_skips_kernel_probe_failure_and_uses_next_candidate()
+    {
+        var openClBroken = new IlgpuBackendSelection(
+            IlgpuBackendKind.OpenClDevice,
+            0,
+            "GPU quebrada",
+            null,
+            PlatformName: "Platform A",
+            PlatformId: "10",
+            OpenClDeviceId: "20");
+        var cpuGood = new IlgpuBackendSelection(
+            IlgpuBackendKind.IlgpuCpu,
+            1,
+            "CPU boa",
+            "placeholder",
+            WarpSize: 4,
+            MaxNumThreads: 16,
+            NumMultiprocessors: 4,
+            MaxNumThreadsPerGroup: 4,
+            CpuNumThreads: 16);
+
+        var selection = IlgpuBackendSelector.ProbeCandidatesForTests(
+            [openClBroken],
+            [cpuGood],
+            candidate => candidate.Kind == IlgpuBackendKind.OpenClDevice
+                ? new InvalidOperationException("kernel-load-failed")
+                : null);
+
+        Assert.Equal(IlgpuBackendKind.IlgpuCpu, selection.Kind);
+        Assert.Equal("CPU boa", selection.DeviceName);
+        Assert.Contains("GPU quebrada", selection.FallbackReason);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void Selector_candidate_choice_is_consistent_across_worker_counts(int workerCount)
+    {
+        var results = new ConcurrentBag<IlgpuBackendSelection>();
+        Parallel.For(0, workerCount, _ =>
+        {
+            var selection = IlgpuBackendSelector.ProbeCandidatesForTests(
+                [new IlgpuBackendSelection(IlgpuBackendKind.OpenClDevice, 0, "GPU-1", null, PlatformName: "Platform", PlatformId: "1", OpenClDeviceId: "2")],
+                [new IlgpuBackendSelection(IlgpuBackendKind.IlgpuCpu, 1, "CPU-1", "placeholder", WarpSize: 4, MaxNumThreads: 16, NumMultiprocessors: 4, MaxNumThreadsPerGroup: 4, CpuNumThreads: 16)],
+                _ => null);
+            results.Add(selection);
+        });
+
+        Assert.Equal(workerCount, results.Count);
+        var first = results.First();
+        Assert.All(results, selection =>
+        {
+            Assert.Equal(first.Kind, selection.Kind);
+            Assert.Equal(first.DeviceName, selection.DeviceName);
+            Assert.Equal(first.PlatformName, selection.PlatformName);
+            Assert.Equal(first.OpenClDeviceId, selection.OpenClDeviceId);
+        });
+    }
 }

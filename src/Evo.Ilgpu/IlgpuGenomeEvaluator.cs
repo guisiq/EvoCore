@@ -43,6 +43,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private readonly bool _kindSupported;
     private readonly bool _functionSetSupported;
     private readonly Action? _beforeKernelExecution;
+    private readonly Action<Action>? _launchInvoker;
+    private readonly Action<Accelerator>? _synchronizeInvoker;
+    private readonly Action<MemoryBuffer[]>? _bufferObserver;
     private Context? _context;
     private Accelerator? _accelerator;
     private string? _unavailableReason;
@@ -64,7 +67,10 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         IlgpuBackendSelection? selectionOverride,
         Func<IlgpuBackendSelection, Context>? contextFactory,
         Func<Context, IlgpuBackendSelection, Accelerator>? acceleratorFactory,
-        Action? beforeKernelExecution)
+        Action? beforeKernelExecution,
+        Action<Action>? launchInvoker = null,
+        Action<Accelerator>? synchronizeInvoker = null,
+        Action<MemoryBuffer[]>? bufferObserver = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
         _functions = functions;
@@ -74,9 +80,13 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             || typeof(T) == typeof(double[]) || typeof(T) == typeof(int[]);
         _functionSetSupported = IsStandardSetFor(functions);
         _beforeKernelExecution = beforeKernelExecution;
+        _launchInvoker = launchInvoker;
+        _synchronizeInvoker = synchronizeInvoker;
+        _bufferObserver = bufferObserver;
         LastFallbackReason = _selection.FallbackReason;
         Backend = _selection.BackendName;
-        DeviceName = _selection.DeviceName;
+        DeviceName = _selection.DiagnosticDeviceName;
+        FallbackEvaluatorKind = fallback is null ? "compiled-default" : "custom";
 
         if (!_kindSupported)
         {
@@ -140,6 +150,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     /// <summary>Cause of the last fallback to CPU, or the selection cause when no OpenCL device was used.</summary>
     public string? LastFallbackReason { get; private set; }
 
+    /// <summary>Distinguishes the built-in compiled CPU fallback from a custom fallback evaluator.</summary>
+    public string FallbackEvaluatorKind { get; }
+
     /// <inheritdoc />
     public void Evaluate(Genome<T> genome, ReadOnlySpan<T> inputs, Span<T> outputs)
     {
@@ -150,18 +163,28 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         LastDeviceExecutionCounts = null;
 
         string? reason = _disposed ? "avaliador descartado" : _unavailableReason;
-        if (_accelerator is not null && TryEvaluateOnDevice(genome, inputArray, outputArray, out reason))
+        if (_accelerator is not null)
         {
-            LastEvaluationUsedDevice = true;
             Backend = _selection.BackendName;
-            DeviceName = _selection.DeviceName;
+            DeviceName = _selection.DiagnosticDeviceName;
             LastFallbackReason = _selection.FallbackReason;
+            if (TryEvaluateOnDevice(genome, inputArray, outputArray, out reason))
+            {
+                LastEvaluationUsedDevice = true;
+            }
+            else
+            {
+                Backend = "CPU fallback";
+                DeviceName = "nenhum";
+                LastFallbackReason = DescribeFallback(reason);
+                _fallback.Evaluate(genome, inputArray, outputArray);
+            }
         }
         else
         {
             Backend = "CPU fallback";
             DeviceName = "nenhum";
-            LastFallbackReason = reason ?? "backend indisponível";
+            LastFallbackReason = DescribeFallback(reason);
             _fallback.Evaluate(genome, inputArray, outputArray);
         }
 
@@ -211,14 +234,13 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         }
 
         var device = devices[index];
-        if (device.Name != selection.DeviceName || device.AcceleratorType != ExpectedAcceleratorType(selection.Kind))
+        if (!MatchesSelection(device, selection))
         {
             throw new InvalidOperationException($"dispositivo '{selection.DeviceName}' não reconhecido no novo contexto");
         }
 
         var accelerator = device.CreateAccelerator(context);
-        if ((selection.WarpSize != 0 && accelerator.WarpSize != selection.WarpSize)
-            || (selection.MaxNumThreads != 0 && accelerator.MaxNumThreads != selection.MaxNumThreads))
+        if (!MatchesSelection(accelerator, selection))
         {
             accelerator.Dispose();
             throw new InvalidOperationException(
@@ -230,6 +252,43 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
 
     private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) =>
         kind == IlgpuBackendKind.OpenClDevice ? AcceleratorType.OpenCL : AcceleratorType.CPU;
+
+    private static bool MatchesSelection(Device device, IlgpuBackendSelection selection)
+    {
+        if (device.Name != selection.DeviceName
+            || device.AcceleratorType != ExpectedAcceleratorType(selection.Kind)
+            || (selection.NumMultiprocessors != 0 && device.NumMultiprocessors != selection.NumMultiprocessors)
+            || (selection.MaxNumThreadsPerGroup != 0 && device.MaxNumThreadsPerGroup != selection.MaxNumThreadsPerGroup))
+        {
+            return false;
+        }
+
+        if (selection.Kind == IlgpuBackendKind.OpenClDevice)
+        {
+            if (device is not CLDevice openCl)
+            {
+                return false;
+            }
+
+            return openCl.PlatformName == selection.PlatformName
+                && openCl.PlatformId.ToString() == selection.PlatformId
+                && openCl.DeviceId.ToString() == selection.OpenClDeviceId;
+        }
+
+        if (selection.Kind == IlgpuBackendKind.IlgpuCpu)
+        {
+            return device is CPUDevice cpu
+                && (selection.CpuNumThreads == 0 || cpu.NumThreads == selection.CpuNumThreads);
+        }
+
+        return false;
+    }
+
+    private static bool MatchesSelection(Accelerator accelerator, IlgpuBackendSelection selection)
+    {
+        return (selection.WarpSize == 0 || accelerator.WarpSize == selection.WarpSize)
+            && (selection.MaxNumThreads == 0 || accelerator.MaxNumThreads == selection.MaxNumThreads);
+    }
 
     private void ReleaseDevice()
     {
@@ -443,10 +502,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var executionBuffer = accelerator.Allocate1D(new int[Math.Max(1, slotCount)]);
         using var outputBuffer = accelerator.Allocate1D<double>(Math.Max(1, outputSlots.Length * lanes));
+        var buffers = new MemoryBuffer[] { programBuffer, constantBuffer, slotBuffer, outSlotBuffer, executionBuffer, outputBuffer };
+        _bufferObserver?.Invoke(buffers);
         _beforeKernelExecution?.Invoke();
-        _doubleKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
-            slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes);
-        accelerator.Synchronize();
+        (_launchInvoker ?? InvokeLaunch)(() => _doubleKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
+            slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes));
+        (_synchronizeInvoker ?? SynchronizeAccelerator)(accelerator);
         var host = new double[Math.Max(1, outputSlots.Length * lanes)];
         var counts = new int[Math.Max(1, slotCount)];
         outputBuffer.CopyToCPU(host);
@@ -464,16 +525,28 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var executionBuffer = accelerator.Allocate1D(new int[Math.Max(1, slotCount)]);
         using var outputBuffer = accelerator.Allocate1D<int>(Math.Max(1, outputSlots.Length * lanes));
+        var buffers = new MemoryBuffer[] { programBuffer, constantBuffer, slotBuffer, outSlotBuffer, executionBuffer, outputBuffer };
+        _bufferObserver?.Invoke(buffers);
         _beforeKernelExecution?.Invoke();
-        _intKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
-            slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes);
-        accelerator.Synchronize();
+        (_launchInvoker ?? InvokeLaunch)(() => _intKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
+            slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes));
+        (_synchronizeInvoker ?? SynchronizeAccelerator)(accelerator);
         var host = new int[Math.Max(1, outputSlots.Length * lanes)];
         var counts = new int[Math.Max(1, slotCount)];
         outputBuffer.CopyToCPU(host);
         executionBuffer.CopyToCPU(counts);
         LastDeviceExecutionCounts = counts;
         return host;
+    }
+
+    private static void InvokeLaunch(Action launch)
+    {
+        launch();
+    }
+
+    private static void SynchronizeAccelerator(Accelerator accelerator)
+    {
+        accelerator.Synchronize();
     }
 
     private static TValue[] Pad<TValue>(TValue[] values) where TValue : unmanaged
@@ -530,7 +603,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         _ => 2,
     };
 
-    private static void DoubleKernel(
+    internal static void DoubleKernel(
         Index1D lane,
         ArrayView<int> program,
         ArrayView<double> constants,
@@ -590,10 +663,18 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             case OpProtectedLog: return double.IsNaN(x0) ? x0 : Math.Log(Math.Abs(x0) + 1e-12);
             case OpMin:
                 if (nan) return x0 + x1;
-                return x0 < x1 ? x0 : x1;
+                if (x0 < x1) return x0;
+                if (x1 < x0) return x1;
+                return x0 == 0.0 && x1 == 0.0
+                    ? (((1.0 / x0) < 0.0) ? x0 : x1)
+                    : x1;
             case OpMax:
                 if (nan) return x0 + x1;
-                return x0 > x1 ? x0 : x1;
+                if (x0 > x1) return x0;
+                if (x1 > x0) return x1;
+                return x0 == 0.0 && x1 == 0.0
+                    ? (((1.0 / x0) < 0.0) ? x1 : x0)
+                    : x1;
             case OpGreaterThan:
                 if (nan) return x0 + x1;
                 return x0 > x1 ? 1.0 : 0.0;
@@ -602,7 +683,13 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         }
     }
 
-    private static void IntKernel(
+    private string DescribeFallback(string? reason)
+    {
+        var fallback = FallbackEvaluatorKind == "compiled-default" ? "compiled CPU default" : "custom fallback evaluator";
+        return reason is null ? fallback : $"{reason}; fallback={fallback}";
+    }
+
+    internal static void IntKernel(
         Index1D lane,
         ArrayView<int> program,
         ArrayView<int> constants,
@@ -670,4 +757,3 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         }
     }
 }
-

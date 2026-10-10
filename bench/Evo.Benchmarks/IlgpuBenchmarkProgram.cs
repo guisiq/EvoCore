@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using Evo.Core;
 using Evo.Core.Functions;
 using Evo.Core.Values;
 using Evo.Ilgpu;
+
+[assembly: InternalsVisibleTo("Evo.Ilgpu.Tests")]
 
 namespace Evo.Benchmarks;
 
@@ -66,6 +69,7 @@ internal static class IlgpuBenchmarkProgram
             evaluator.Backend,
             evaluator.DeviceName,
             evaluator.LastFallbackReason,
+            evaluator.FallbackEvaluatorKind,
             () => evaluator.Evaluate(genome, inputs, actual));
     }
 
@@ -110,6 +114,7 @@ internal static class IlgpuBenchmarkProgram
             evaluator.Backend,
             evaluator.DeviceName,
             evaluator.LastFallbackReason,
+            evaluator.FallbackEvaluatorKind,
             () => evaluator.Evaluate(genome, inputs, actual));
     }
 
@@ -165,6 +170,7 @@ internal static class IlgpuBenchmarkProgram
             evaluator.Backend,
             evaluator.DeviceName,
             evaluator.LastFallbackReason,
+            evaluator.FallbackEvaluatorKind,
             () => evaluator.Evaluate(genome, inputs, actual));
     }
 
@@ -223,10 +229,11 @@ internal static class IlgpuBenchmarkProgram
             evaluator.Backend,
             evaluator.DeviceName,
             evaluator.LastFallbackReason,
+            evaluator.FallbackEvaluatorKind,
             () => evaluator.Evaluate(genome, inputs, actual));
     }
 
-    private static void BenchmarkScalar(string type, string backend, string device, string? fallbackReason, Action action)
+    private static void BenchmarkScalar(string type, string backend, string device, string? fallbackReason, string fallbackKind, Action action)
     {
         for (var i = 0; i < WarmupRepetitions; i++)
         {
@@ -241,7 +248,7 @@ internal static class IlgpuBenchmarkProgram
 
         sw.Stop();
         var nsPerEval = sw.Elapsed.TotalMilliseconds * 1_000_000.0 / MeasureRepetitions;
-        Console.WriteLine($"tipo={type} parity=PASS backend={backend} device={device} fallback={(fallbackReason ?? "(nenhum)")} ns/avaliacao={nsPerEval:F1} total_ms={sw.Elapsed.TotalMilliseconds:F2}");
+        Console.WriteLine($"tipo={type} parity=PASS backend={backend} device={device} fallbackKind={fallbackKind} fallback={(fallbackReason ?? "(nenhum)")} ns/avaliacao={nsPerEval:F1} total_ms={sw.Elapsed.TotalMilliseconds:F2}");
     }
 
     private static int FindFunctionId<T>(IFunctionSet<T> functions, string part)
@@ -257,7 +264,7 @@ internal static class IlgpuBenchmarkProgram
         throw new InvalidOperationException($"função '{part}' não encontrada");
     }
 
-    private static void AssertDouble(double expected, double actual)
+    internal static void AssertDouble(double expected, double actual)
     {
         if (double.IsNaN(expected) || double.IsNaN(actual))
         {
@@ -286,7 +293,7 @@ internal static class IlgpuBenchmarkProgram
         }
     }
 
-    private static void AssertDoubleArray(double[] expected, double[] actual)
+    internal static void AssertDoubleArray(double[] expected, double[] actual)
     {
         if (expected.Length != actual.Length)
         {

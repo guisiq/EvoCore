@@ -93,6 +93,13 @@
           "xunit.extensibility.core": "[2.9.2]"
         }
       },
+      "evo.benchmarks": {
+        "type": "Project",
+        "dependencies": {
+          "Evo.Core": "[1.0.0, )",
+          "Evo.Ilgpu": "[1.0.0, )"
+        }
+      },
       "evo.core": {
         "type": "Project"
       },

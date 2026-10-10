@@ -223,4 +223,73 @@ public sealed class IlgpuParityTests
         Assert.Same(first, second);
         Assert.False(string.IsNullOrEmpty(first.BackendName));
     }
+
+    [Fact]
+    public void Double_kernel_preserves_signed_zero_bits_for_min_and_max()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        using var ilgpu = new IlgpuGenomeEvaluator<double>(functions);
+        if (!ilgpu.Backend.StartsWith("ILGPU", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var minId = IlgpuTestHelpers.FindFunctionId(functions, "min");
+        var maxId = IlgpuTestHelpers.FindFunctionId(functions, "max");
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 2, OutputCount: 2, MaxArity: 2, LevelsBack: 2);
+        var genome = Genome<double>.FromGenes(
+            shape,
+            [minId, maxId],
+            [0, 1, 1, 0],
+            [0.0, 0.0],
+            [2, 3],
+            DoubleValueSemantics.Instance,
+            functions);
+        var inputs = new[] { -0.0, 0.0 };
+        var expected = new double[2];
+        var actual = new double[2];
+        new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+        ilgpu.Evaluate(genome, inputs, actual);
+
+        IlgpuTestHelpers.AssertRealKernelExecution(ilgpu, genome, functions);
+        Assert.Equal(BitConverter.DoubleToInt64Bits(expected[0]), BitConverter.DoubleToInt64Bits(actual[0]));
+        Assert.Equal(BitConverter.DoubleToInt64Bits(expected[1]), BitConverter.DoubleToInt64Bits(actual[1]));
+        Assert.Equal(unchecked((long)0x8000000000000000), BitConverter.DoubleToInt64Bits(actual[0]));
+        Assert.Equal(0L, BitConverter.DoubleToInt64Bits(actual[1]));
+    }
+
+    [Fact]
+    public void Double_kernel_preserves_nan_and_infinity_classification()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        using var ilgpu = new IlgpuGenomeEvaluator<double>(functions);
+        if (!ilgpu.Backend.StartsWith("ILGPU", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var constId = IlgpuTestHelpers.FindFunctionId(functions, "const");
+        var shape = new GenomeShape(InputCount: 1, NodeCount: 3, OutputCount: 3, MaxArity: 1, LevelsBack: 3);
+        var genome = Genome<double>.FromGenes(
+            shape,
+            [constId, constId, constId],
+            [0, 0, 0],
+            [double.NaN, double.PositiveInfinity, double.NegativeInfinity],
+            [1, 2, 3],
+            DoubleValueSemantics.Instance,
+            functions);
+        var expected = new double[3];
+        var actual = new double[3];
+        new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, [1.0], expected);
+        ilgpu.Evaluate(genome, [1.0], actual);
+
+        IlgpuTestHelpers.AssertRealKernelExecution(ilgpu, genome, functions);
+        Assert.True(double.IsNaN(actual[0]));
+        Assert.True(double.IsPositiveInfinity(actual[1]));
+        Assert.True(double.IsNegativeInfinity(actual[2]));
+        for (var i = 0; i < expected.Length; i++)
+        {
+            IlgpuTestHelpers.AssertDoubleClose(expected[i], actual[i], $"output {i}");
+        }
+    }
 }

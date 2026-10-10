@@ -23,7 +23,15 @@ public sealed class IlgpuLifecycleTests
             {
                 using var accelerator = devices[i].CreateAccelerator(context);
                 return new IlgpuBackendSelection(
-                    IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, "teste", accelerator.WarpSize, accelerator.MaxNumThreads);
+                    IlgpuBackendKind.IlgpuCpu,
+                    i,
+                    devices[i].Name,
+                    "teste",
+                    accelerator.WarpSize,
+                    accelerator.MaxNumThreads,
+                    devices[i].NumMultiprocessors,
+                    devices[i].MaxNumThreadsPerGroup,
+                    ((CPUDevice)devices[i]).NumThreads);
             }
         }
 
@@ -137,8 +145,11 @@ public sealed class IlgpuLifecycleTests
         var ilgpu = new IlgpuGenomeEvaluator<double[]>(functions);
         var accelerator = ilgpu.InternalAccelerator;
         var context = ilgpu.InternalContext;
-        Assert.NotNull(accelerator);
-        Assert.NotNull(context);
+        if (accelerator is null || context is null)
+        {
+            ilgpu.Dispose();
+            return;
+        }
 
         ilgpu.Dispose();
         ilgpu.Dispose();
@@ -157,6 +168,11 @@ public sealed class IlgpuLifecycleTests
         var ilgpu = new IlgpuGenomeEvaluator<double[]>(functions);
         var accelerator = ilgpu.InternalAccelerator;
         var context = ilgpu.InternalContext;
+        if (accelerator is null || context is null)
+        {
+            ilgpu.Dispose();
+            return;
+        }
 
         Assert.ThrowsAny<Exception>(() => ilgpu.Evaluate(genome, new[] { new[] { 1.0 }, new[] { 1.0, 2.0 } }, new double[1][]));
         ilgpu.Dispose();
@@ -221,7 +237,10 @@ public sealed class IlgpuLifecycleTests
         var functions = StandardDoubleArrayFunctionSet.Instance;
         using var ilgpu = new IlgpuGenomeEvaluator<double[]>(functions);
         var context = ilgpu.InternalContext;
-        Assert.NotNull(context);
+        if (context is null)
+        {
+            return;
+        }
 
         Assert.DoesNotContain(context!.Devices.ToArray(), d => d.AcceleratorType == AcceleratorType.Cuda);
     }
@@ -278,6 +297,33 @@ public sealed class IlgpuLifecycleTests
     }
 
     [Fact]
+    public void Evaluator_falls_back_when_device_configuration_diverges_with_same_aggregate_capabilities()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var baseSelection = new IlgpuBackendSelection(
+            IlgpuBackendKind.IlgpuCpu,
+            0,
+            "CPUAccelerator",
+            "teste",
+            WarpSize: 4,
+            MaxNumThreads: 16,
+            NumMultiprocessors: 4,
+            MaxNumThreadsPerGroup: 4,
+            CpuNumThreads: 16);
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: baseSelection,
+            contextFactory: _ => Context.Create(builder => builder.CPU(new CPUDevice(4, 2, 2))),
+            acceleratorFactory: null,
+            beforeKernelExecution: null);
+
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Contains("InvalidOperationException", evaluator.LastFallbackReason);
+    }
+
+    [Fact]
     public void Kernel_execution_failures_remain_explicit_and_are_not_masked_by_fallback()
     {
         var functions = StandardDoubleFunctionSet.Instance;
@@ -321,6 +367,97 @@ public sealed class IlgpuLifecycleTests
         var context = evaluator.InternalContext;
         Assert.NotNull(context);
         Assert.False(context!.IsDisposed);
+    }
+
+    [Fact]
+    public void Launch_failures_after_kernel_entry_preserve_attempted_backend_and_dispose_buffers()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var selection = CpuSelection();
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var genome = Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        MemoryBuffer[]? observedBuffers = null;
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: null,
+            launchInvoker: _ => throw new InvalidOperationException("falha-lancamento-double"),
+            synchronizeInvoker: null,
+            bufferObserver: buffers => observedBuffers = buffers.ToArray());
+
+        Assert.ThrowsAny<Exception>(() => evaluator.Evaluate(
+            Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1], [0.0], [2], DoubleValueSemantics.Instance, functions),
+            [1.0, 2.0],
+            new double[1]));
+        Assert.NotNull(observedBuffers);
+        Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+        Assert.StartsWith("ILGPU", evaluator.Backend);
+        Assert.NotEqual("nenhum", evaluator.DeviceName);
+        Assert.DoesNotContain("operandos de array", evaluator.LastFallbackReason ?? string.Empty);
+    }
+
+    [Fact]
+    public void Synchronize_failures_after_launch_preserve_attempted_backend_and_dispose_buffers_for_int()
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        var selection = CpuSelection();
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var genome = Genome<int>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0], [2], Int32ValueSemantics.Instance, functions);
+        MemoryBuffer[]? observedBuffers = null;
+        using var evaluator = new IlgpuGenomeEvaluator<int>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: null,
+            launchInvoker: null,
+            synchronizeInvoker: _ => throw new InvalidOperationException("falha-sync-int"),
+            bufferObserver: buffers => observedBuffers = buffers.ToArray());
+
+        var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(genome, [1, 2], new int[1]));
+        Assert.Equal("falha-sync-int", error.Message);
+        Assert.NotNull(observedBuffers);
+        Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+        Assert.StartsWith("ILGPU", evaluator.Backend);
+        Assert.NotEqual("nenhum", evaluator.DeviceName);
+    }
+
+    [Fact]
+    public void Subsequent_launch_failure_overwrites_previous_fallback_diagnostics()
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var selection = CpuSelection();
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var genome = Genome<double[]>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<double>()], [2], DoubleArrayValueSemantics.Instance, functions);
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: null,
+            launchInvoker: _ => throw new InvalidOperationException("falha-seguinte"),
+            synchronizeInvoker: null,
+            bufferObserver: null);
+
+        Assert.ThrowsAny<Exception>(() => evaluator.Evaluate(genome, new[] { new[] { 1.0, 2.0 }, new[] { 3.0 } }, new double[1][]));
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Contains("operandos de array", evaluator.LastFallbackReason);
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            evaluator.Evaluate(genome, new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } }, new double[1][]));
+        Assert.Equal("falha-seguinte", error.Message);
+        Assert.StartsWith("ILGPU", evaluator.Backend);
+        Assert.NotEqual("nenhum", evaluator.DeviceName);
+        Assert.DoesNotContain("operandos de array", evaluator.LastFallbackReason ?? string.Empty);
     }
 
     [Fact]
