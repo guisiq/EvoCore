@@ -299,6 +299,48 @@ public sealed class IlgpuDeviceMatrixTests
     }
 
     /// <summary>
+    /// Zero com sinal em Min/Max para double[] (elemento a elemento), nos três caminhos: referência, compiled CPU
+    /// distinto e dispositivo. Comparação bit a bit, sem tolerância.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Signed_zero_min_max_arrays_match_bit_for_bit_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var minId = IlgpuTestHelpers.FindFunctionId(functions, "min");
+        var maxId = IlgpuTestHelpers.FindFunctionId(functions, "max");
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 4, OutputCount: 4, MaxArity: 2, LevelsBack: 4);
+        var genome = Genome<double[]>.FromGenes(
+            shape,
+            [minId, maxId, minId, maxId],
+            [0, 1, 1, 0, 1, 0, 0, 1],
+            [Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>()],
+            [2, 3, 4, 5],
+            DoubleArrayValueSemantics.Instance,
+            functions);
+        var inputs = new[] { new[] { -0.0, 0.0 }, new[] { 0.0, -0.0 } };
+        var expected = new double[4][];
+        var compiled = new double[4][];
+        var actual = new double[4][];
+        new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+        new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        evaluator.Evaluate(genome, inputs, actual);
+
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.Equal(expected[i].Length, compiled[i].Length);
+            Assert.Equal(expected[i].Length, actual[i].Length);
+            for (var j = 0; j < expected[i].Length; j++)
+            {
+                var e = BitConverter.DoubleToInt64Bits(expected[i][j]);
+                Assert.True(e == BitConverter.DoubleToInt64Bits(compiled[i][j]), $"{label} compiled saída {i}[{j}]");
+                Assert.True(e == BitConverter.DoubleToInt64Bits(actual[i][j]), $"{label} dispositivo saída {i}[{j}]");
+            }
+        }
+    }
+
+    /// <summary>
     /// Carga fixa e heterogênea (genomas e entradas distintos) usada para provar ordem real: cada caso só é
     /// considerado correto se o resultado no índice correspondente bater com a referência daquele caso
     /// específico, não apenas se a contagem de itens processados bater.
