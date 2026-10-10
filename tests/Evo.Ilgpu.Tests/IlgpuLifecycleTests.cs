@@ -275,6 +275,56 @@ public sealed class IlgpuLifecycleTests
     }
 
     [Fact]
+    public void Kernel_execution_failures_after_buffer_acquisition_remain_explicit_for_double()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var selection = CpuSelection();
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var genome = Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: static () => throw new InvalidOperationException("falha-apos-buffers-double"));
+
+        var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(genome, [1.0, 2.0], new double[1]));
+        Assert.Equal("falha-apos-buffers-double", error.Message);
+        Assert.NotEqual("CPU fallback", evaluator.Backend);
+
+        var context = evaluator.InternalContext;
+        Assert.NotNull(context);
+        Assert.False(context!.IsDisposed);
+    }
+
+    [Fact]
+    public void Kernel_execution_failures_after_buffer_acquisition_remain_explicit_for_int()
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        var selection = CpuSelection();
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        var genome = Genome<int>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0], [2], Int32ValueSemantics.Instance, functions);
+        using var evaluator = new IlgpuGenomeEvaluator<int>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: static () => throw new InvalidOperationException("falha-apos-buffers-int"));
+
+        var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(genome, [1, 2], new int[1]));
+        Assert.Equal("falha-apos-buffers-int", error.Message);
+        Assert.NotEqual("CPU fallback", evaluator.Backend);
+
+        var context = evaluator.InternalContext;
+        Assert.NotNull(context);
+        Assert.False(context!.IsDisposed);
+    }
+
+    [Fact]
     public void Int_array_constant_with_empty_input_returns_clone_and_mismatched_add_throws_like_reference()
     {
         var functions = StandardInt32ArrayFunctionSet.Instance;

@@ -437,7 +437,6 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
 
     private double[] RunDouble(int[] program, double[] constants, double[] slots, int[] outputSlots, int lanes, int instructions, int slotCount)
     {
-        _beforeKernelExecution?.Invoke();
         var accelerator = _accelerator!;
         using var programBuffer = accelerator.Allocate1D(Pad(program));
         using var constantBuffer = accelerator.Allocate1D(Pad(constants));
@@ -445,6 +444,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var executionBuffer = accelerator.Allocate1D(new int[Math.Max(1, slotCount)]);
         using var outputBuffer = accelerator.Allocate1D<double>(Math.Max(1, outputSlots.Length * lanes));
+        _beforeKernelExecution?.Invoke();
         _doubleKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
             slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes);
         accelerator.Synchronize();
@@ -458,7 +458,6 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
 
     private int[] RunInt(int[] program, int[] constants, int[] slots, int[] outputSlots, int lanes, int instructions, int slotCount)
     {
-        _beforeKernelExecution?.Invoke();
         var accelerator = _accelerator!;
         using var programBuffer = accelerator.Allocate1D(Pad(program));
         using var constantBuffer = accelerator.Allocate1D(Pad(constants));
@@ -466,6 +465,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         using var outSlotBuffer = accelerator.Allocate1D(outputSlots.Length == 0 ? new int[1] : outputSlots);
         using var executionBuffer = accelerator.Allocate1D(new int[Math.Max(1, slotCount)]);
         using var outputBuffer = accelerator.Allocate1D<int>(Math.Max(1, outputSlots.Length * lanes));
+        _beforeKernelExecution?.Invoke();
         _intKernel!(new Index1D(lanes), programBuffer.View, constantBuffer.View,
             slotBuffer.View, outSlotBuffer.View, outputBuffer.View, executionBuffer.View, instructions, lanes);
         accelerator.Synchronize();
