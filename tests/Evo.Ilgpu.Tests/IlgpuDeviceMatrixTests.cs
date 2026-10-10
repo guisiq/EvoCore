@@ -19,48 +19,26 @@ namespace Evo.Ilgpu.Tests;
 /// </summary>
 public sealed class IlgpuDeviceMatrixTests
 {
-    public static IEnumerable<object[]> Devices()
+    /// <summary>
+    /// MemberData compartilhado com <see cref="OpenClDeviceCatalogTests"/>. Linhas indisponíveis carregam a causa
+    /// e são reprovadas pela matriz, nunca aprovadas silenciosamente.
+    /// </summary>
+    public static IEnumerable<object[]> Devices() =>
+        IlgpuDeviceCatalog.Entries()
+            .Where(entry => entry[1] is not null && entry[2] is null)
+            .Select(entry => new object[] { entry[0]!, entry[1]! });
+
+    /// <summary>Dispositivos listados pelo catálogo sem seleção utilizável: reprovados com a causa, nunca aprovados.</summary>
+    public static IEnumerable<object[]> UnavailableDevices() =>
+        IlgpuDeviceCatalog.Entries()
+            .Where(entry => entry[2] is not null)
+            .Select(entry => new object[] { entry[0]!, entry[2]! });
+
+    [Fact]
+    public void Unavailable_devices_are_reported_with_cause_and_never_approved()
     {
-        yield return new object[] { "ILGPU/CPU", ForcedCpuSelection() };
-
-        var processSelection = IlgpuBackendSelector.Selection;
-        if (processSelection.Kind == IlgpuBackendKind.OpenClDevice)
-        {
-            yield return new object[] { "ILGPU/OpenCL:" + processSelection.DiagnosticDeviceName, processSelection };
-        }
-        else
-        {
-            // Nenhum dispositivo OpenCL utilizável foi selecionado pelo processo nesta máquina; registrado em
-            // devices.md/coverage.md como indisponível, nunca aprovado como se fosse uma linha OpenCL da matriz.
-        }
-    }
-
-    private static IlgpuBackendSelection ForcedCpuSelection()
-    {
-        using var context = Context.Create(builder => builder.OpenCL().CPU());
-        var devices = context.Devices.ToArray();
-        for (var i = 0; i < devices.Length; i++)
-        {
-            var device = devices[i];
-            if (device.AcceleratorType != AcceleratorType.CPU)
-            {
-                continue;
-            }
-
-            using var accelerator = device.CreateAccelerator(context);
-            return new IlgpuBackendSelection(
-                IlgpuBackendKind.IlgpuCpu,
-                i,
-                device.Name,
-                null,
-                accelerator.WarpSize,
-                accelerator.MaxNumThreads,
-                device.NumMultiprocessors,
-                device.MaxNumThreadsPerGroup,
-                ((CPUDevice)device).NumThreads);
-        }
-
-        throw new InvalidOperationException("dispositivo CPU do ILGPU não encontrado neste PC");
+        var unavailable = UnavailableDevices().Select(row => $"{row[0]}: {row[1]}").ToArray();
+        Assert.Empty(unavailable);
     }
 
     private static Genome<double> DoubleScenario(IFunctionSet<double> functions)

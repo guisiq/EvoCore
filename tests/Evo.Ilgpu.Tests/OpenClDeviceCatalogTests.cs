@@ -91,6 +91,27 @@ public sealed class OpenClDeviceCatalogTests
         Assert.True(cpu.NumThreads > 0, "configuração ILGPU CPU deve relatar NumThreads > 0");
     }
 
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Catalog_entry_asserts_device_identity(string label, IlgpuBackendSelection selection)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(label));
+        Assert.False(string.IsNullOrWhiteSpace(selection.DeviceName));
+        Assert.True(selection.MaxNumThreads > 0, $"{label} deve relatar MaxNumThreads > 0");
+        if (selection.Kind == IlgpuBackendKind.OpenClDevice)
+        {
+            // OpenCL não expõe WarpSize pelo runtime ILGPU (relata 0); a identidade é plataforma + ids.
+            Assert.False(string.IsNullOrWhiteSpace(selection.PlatformName), $"{label} deve identificar a plataforma");
+            Assert.False(string.IsNullOrWhiteSpace(selection.PlatformId), $"{label} deve identificar PlatformId");
+            Assert.False(string.IsNullOrWhiteSpace(selection.OpenClDeviceId), $"{label} deve identificar DeviceId");
+        }
+        else
+        {
+            Assert.True(selection.WarpSize > 0, $"{label} deve relatar WarpSize > 0");
+            Assert.True(selection.CpuNumThreads > 0, $"{label} deve relatar CpuNumThreads > 0");
+        }
+    }
+
     [Fact]
     public void Device_identity_is_stable_across_independent_contexts()
     {
