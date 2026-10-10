@@ -191,6 +191,7 @@ public sealed class IlgpuDeviceMatrixTests
     [MemberData(nameof(Devices))]
     public void Worker_counts_1_2_n_produce_bitwise_identical_results_and_order_on_device(string label, IlgpuBackendSelection selection)
     {
+        Assert.False(string.IsNullOrEmpty(label), "rótulo do dispositivo deve identificar o backend sob teste");
         var functions = StandardDoubleFunctionSet.Instance;
         var genome = DoubleScenario(functions);
         var inputs = new[] { 1.25, -3.5 };
@@ -295,6 +296,7 @@ public sealed class IlgpuDeviceMatrixTests
     [MemberData(nameof(Devices))]
     public void Device_identity_is_stable_across_independent_contexts(string label, IlgpuBackendSelection selection)
     {
+        Assert.False(string.IsNullOrEmpty(label), "rótulo do dispositivo deve identificar o backend sob teste");
         using var first = new IlgpuGenomeEvaluator<double>(StandardDoubleFunctionSet.Instance, null, selection, null, null, null);
         using var second = new IlgpuGenomeEvaluator<double>(StandardDoubleFunctionSet.Instance, null, selection, null, null, null);
         Assert.Equal(first.Backend, second.Backend);
