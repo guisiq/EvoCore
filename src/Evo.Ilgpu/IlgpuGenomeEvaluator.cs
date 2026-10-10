@@ -30,7 +30,7 @@ public sealed class IlgpuBackendInitializationException : Exception
     public string Cause { get; }
 
     internal IlgpuBackendInitializationException(long workerId, string backend, string cause)
-        : base($"worker {workerId}: falha ao inicializar {backend} depois da seleção compartilhada: {cause}")
+        : base($"worker={workerId}: falha ao inicializar {backend} depois da seleção compartilhada: {cause}")
     {
         WorkerId = workerId;
         Backend = backend;
@@ -101,7 +101,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         Action<MemoryBuffer[]>? bufferObserver = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
-        WorkerId = System.Threading.Interlocked.Increment(ref _workerCounter);
+        WorkerId = System.Threading.Interlocked.Increment(ref _workerCounter) - 1;
         _functions = functions;
         _fallback = fallback ?? CreateDefaultFallback(functions);
         _selection = selectionOverride ?? IlgpuBackendSelector.Selection;
@@ -146,7 +146,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 ReleaseDevice();
-                var cause = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}";
+                var cause = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}: {ex.Message}";
                 IlgpuBackendSelector.ReportInitializationFailure(_selection, cause);
                 throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, cause);
             }
