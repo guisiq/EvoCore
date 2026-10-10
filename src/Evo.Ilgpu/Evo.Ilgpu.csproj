@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Evo.Ilgpu</RootNamespace>
+    <AssemblyName>Evo.Ilgpu</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ILGPU" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Evo.Core\Evo.Core.csproj" />
+  </ItemGroup>
+
+</Project>
