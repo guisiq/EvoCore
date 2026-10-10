@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Evo.Core;
 using Evo.Core.Functions;
 using Evo.Core.Values;
@@ -8,45 +9,193 @@ namespace Evo.Ilgpu.Tests;
 
 public sealed class IlgpuWorkerCountTests
 {
-    private static int AddId(IFunctionSet<double> functions)
+    private sealed class TrackingFitness : IFitnessEvaluator<double>
     {
-        for (var i = 0; i < functions.Count; i++)
+        private readonly Action<int>? _afterCase;
+        private readonly double[] _cases = [1.0, -2.0, 3.5];
+
+        public TrackingFitness(Action<int>? afterCase = null)
         {
-            if (functions.Get(i).Id.Contains("add", StringComparison.OrdinalIgnoreCase))
-            {
-                return i;
-            }
+            _afterCase = afterCase;
         }
 
-        throw new InvalidOperationException("função add não encontrada");
+        public int CallCount { get; private set; }
+
+        public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var output = new double[1];
+            var sum = 0.0;
+            foreach (var value in _cases)
+            {
+                evaluator.Evaluate(genome, [value, 1.0], output);
+                CallCount++;
+                _afterCase?.Invoke(CallCount);
+                cancellationToken.ThrowIfCancellationRequested();
+                sum += output[0];
+            }
+
+            return FitnessResult.Valid(sum);
+        }
+    }
+
+    private static Genome<double> DoubleAddGenome(IFunctionSet<double> functions)
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        return Genome<double>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+    }
+
+    private static Genome<int[]> IntArrayAddGenome(IFunctionSet<int[]> functions)
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+        return Genome<int[]>.FromGenes(shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<int>()], [2], Int32ArrayValueSemantics.Instance, functions);
     }
 
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(4)]
-    public void Results_are_identical_across_isolated_workers(int workerCount)
+    public void Results_and_backend_identity_are_identical_across_isolated_workers(int workerCount)
     {
         var functions = StandardDoubleFunctionSet.Instance;
-        var shape = new GenomeShape(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
-        var genome = Genome<double>.FromGenes(shape, new[] { AddId(functions) }, new[] { 0, 1 },
-            new[] { 0.0 }, new[] { 2 }, DoubleValueSemantics.Instance, functions);
+        var genome = DoubleAddGenome(functions);
         var inputs = new[] { 1.5, -2.25 };
         var expected = new double[1];
         new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
 
         var results = new double[workerCount][];
+        var backends = new string[workerCount];
+        var devices = new string[workerCount];
+        var reasons = new string?[workerCount];
         Parallel.For(0, workerCount, w =>
         {
             using var evaluator = new IlgpuGenomeEvaluator<double>(functions);
             var output = new double[1];
             evaluator.Evaluate(genome, inputs, output);
             results[w] = output;
+            backends[w] = evaluator.Backend;
+            devices[w] = evaluator.DeviceName;
+            reasons[w] = evaluator.LastFallbackReason;
         });
 
         foreach (var result in results)
         {
             Assert.Equal(expected[0], result[0], 12);
+        }
+
+        Assert.All(backends, backend => Assert.Equal(backends[0], backend));
+        Assert.All(devices, device => Assert.Equal(devices[0], device));
+        Assert.All(reasons, reason => Assert.Equal(reasons[0], reason));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void Array_results_are_identical_across_isolated_workers(int workerCount)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var genome = IntArrayAddGenome(functions);
+        var inputs = new[] { new[] { 1, 2, 3 }, new[] { 4, 5, 6 } };
+        var expected = new int[1][];
+        new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+
+        var results = new ConcurrentBag<int[]>();
+        Parallel.For(0, workerCount, _ =>
+        {
+            using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions);
+            var output = new int[1][];
+            evaluator.Evaluate(genome, inputs, output);
+            results.Add(output[0]);
+        });
+
+        Assert.Equal(workerCount, results.Count);
+        foreach (var result in results)
+        {
+            Assert.Equal(expected[0], result);
+        }
+    }
+
+    [Fact]
+    public void Fitness_state_is_isolated_across_workers()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = DoubleAddGenome(functions);
+        var calls = new ConcurrentBag<int>();
+        var fitnessValues = new ConcurrentBag<double>();
+
+        Parallel.For(0, 4, _ =>
+        {
+            using var evaluator = new IlgpuGenomeEvaluator<double>(functions);
+            var fitness = new TrackingFitness();
+            var result = fitness.Evaluate(genome, evaluator, CancellationToken.None);
+            calls.Add(fitness.CallCount);
+            fitnessValues.Add(result.Value);
+        });
+
+        Assert.All(calls, count => Assert.Equal(3, count));
+        Assert.All(fitnessValues, value => Assert.Equal(fitnessValues.First(), value, 12));
+    }
+
+    [Fact]
+    public void Cancellation_before_fitness_evaluation_is_observed_via_existing_contract_and_resources_are_released()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = DoubleAddGenome(functions);
+        var fitness = new TrackingFitness();
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var evaluator = new IlgpuGenomeEvaluator<double>(functions);
+        var accelerator = evaluator.InternalAccelerator;
+        var context = evaluator.InternalContext;
+
+        Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, cts.Token));
+        Assert.Equal(0, fitness.CallCount);
+        evaluator.Dispose();
+
+        if (accelerator is not null)
+        {
+            Assert.True(accelerator.IsDisposed);
+        }
+
+        if (context is not null)
+        {
+            Assert.True(context.IsDisposed);
+        }
+    }
+
+    [Fact]
+    public void Cancellation_during_fitness_evaluation_is_observed_via_existing_contract_and_resources_are_released()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = DoubleAddGenome(functions);
+        using var cts = new CancellationTokenSource();
+        var fitness = new TrackingFitness(afterCase: callCount =>
+        {
+            if (callCount == 1)
+            {
+                cts.Cancel();
+            }
+        });
+
+        var evaluator = new IlgpuGenomeEvaluator<double>(functions);
+        var accelerator = evaluator.InternalAccelerator;
+        var context = evaluator.InternalContext;
+
+        Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, cts.Token));
+        Assert.Equal(1, fitness.CallCount);
+        evaluator.Dispose();
+
+        if (accelerator is not null)
+        {
+            Assert.True(accelerator.IsDisposed);
+        }
+
+        if (context is not null)
+        {
+            Assert.True(context.IsDisposed);
         }
     }
 }

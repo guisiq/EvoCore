@@ -8,48 +8,133 @@ namespace Evo.Ilgpu.Tests;
 
 public sealed class IlgpuArrayParityTests
 {
-    private static readonly GenomeShape Shape = new(InputCount: 2, NodeCount: 8, OutputCount: 2, MaxArity: 3, LevelsBack: 8);
+    private static readonly GenomeShape RandomShape = new(InputCount: 2, NodeCount: 8, OutputCount: 2, MaxArity: 3, LevelsBack: 8);
 
     private static Genome<double[]> RandomDoubleArray(ulong seed, IFunctionSet<double[]> functions)
     {
         var rng = RandomStream.Create(seed, 0, 0, 0);
-        var fg = new int[Shape.NodeCount];
-        var cg = new int[Shape.NodeCount * Shape.MaxArity];
-        var pg = new double[Shape.NodeCount][];
-        for (var n = 0; n < Shape.NodeCount; n++)
+        var fg = new int[RandomShape.NodeCount];
+        var cg = new int[RandomShape.NodeCount * RandomShape.MaxArity];
+        var pg = new double[RandomShape.NodeCount][];
+        for (var n = 0; n < RandomShape.NodeCount; n++)
         {
             fg[n] = rng.NextInt(0, functions.Count);
-            for (var a = 0; a < Shape.MaxArity; a++)
+            for (var a = 0; a < RandomShape.MaxArity; a++)
             {
-                cg[n * Shape.MaxArity + a] = rng.NextInt(0, Shape.InputCount + n);
+                cg[n * RandomShape.MaxArity + a] = rng.NextInt(0, RandomShape.InputCount + n);
             }
 
             pg[n] = [rng.NextDouble() * 4 - 2, rng.NextDouble() * 4 - 2, rng.NextDouble() * 4 - 2];
         }
 
-        var og = new[] { rng.NextInt(0, Shape.InputCount + Shape.NodeCount), rng.NextInt(0, Shape.InputCount + Shape.NodeCount) };
-        return Genome<double[]>.FromGenes(Shape, fg, cg, pg, og, DoubleArrayValueSemantics.Instance, functions);
+        var og = new[]
+        {
+            rng.NextInt(0, RandomShape.InputCount + RandomShape.NodeCount),
+            rng.NextInt(0, RandomShape.InputCount + RandomShape.NodeCount),
+        };
+        return Genome<double[]>.FromGenes(RandomShape, fg, cg, pg, og, DoubleArrayValueSemantics.Instance, functions);
     }
 
     private static Genome<int[]> RandomInt32Array(ulong seed, IFunctionSet<int[]> functions)
     {
         var rng = RandomStream.Create(seed, 0, 0, 0);
-        var fg = new int[Shape.NodeCount];
-        var cg = new int[Shape.NodeCount * Shape.MaxArity];
-        var pg = new int[Shape.NodeCount][];
-        for (var n = 0; n < Shape.NodeCount; n++)
+        var fg = new int[RandomShape.NodeCount];
+        var cg = new int[RandomShape.NodeCount * RandomShape.MaxArity];
+        var pg = new int[RandomShape.NodeCount][];
+        for (var n = 0; n < RandomShape.NodeCount; n++)
         {
             fg[n] = rng.NextInt(0, functions.Count);
-            for (var a = 0; a < Shape.MaxArity; a++)
+            for (var a = 0; a < RandomShape.MaxArity; a++)
             {
-                cg[n * Shape.MaxArity + a] = rng.NextInt(0, Shape.InputCount + n);
+                cg[n * RandomShape.MaxArity + a] = rng.NextInt(0, RandomShape.InputCount + n);
             }
 
             pg[n] = [rng.NextInt(-20, 20), rng.NextInt(-20, 20), rng.NextInt(-20, 20)];
         }
 
-        var og = new[] { rng.NextInt(0, Shape.InputCount + Shape.NodeCount), rng.NextInt(0, Shape.InputCount + Shape.NodeCount) };
-        return Genome<int[]>.FromGenes(Shape, fg, cg, pg, og, Int32ArrayValueSemantics.Instance, functions);
+        var og = new[]
+        {
+            rng.NextInt(0, RandomShape.InputCount + RandomShape.NodeCount),
+            rng.NextInt(0, RandomShape.InputCount + RandomShape.NodeCount),
+        };
+        return Genome<int[]>.FromGenes(RandomShape, fg, cg, pg, og, Int32ArrayValueSemantics.Instance, functions);
+    }
+
+    private static Genome<double[]> DoubleArrayScenarioGenome(IFunctionSet<double[]> functions)
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 8, OutputCount: 3, MaxArity: 3, LevelsBack: 8);
+        var constantId = IlgpuTestHelpers.FindFunctionId(functions, "const");
+        var sqrtId = IlgpuTestHelpers.FindFunctionId(functions, "sqrt");
+        var logId = IlgpuTestHelpers.FindFunctionId(functions, "log");
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var divideId = IlgpuTestHelpers.FindFunctionId(functions, "divide");
+        var greaterId = IlgpuTestHelpers.FindFunctionId(functions, "greater");
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+
+        return Genome<double[]>.FromGenes(
+            shape,
+            [constantId, sqrtId, logId, addId, divideId, greaterId, selectId, addId],
+            [
+                0, 0, 0,
+                2, 0, 0,
+                2, 0, 0,
+                3, 4, 0,
+                0, 1, 0,
+                0, 1, 0,
+                7, 5, 6,
+                3, 3, 0,
+            ],
+            [
+                [-4.0, -4.0, -4.0],
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+                Array.Empty<double>(),
+            ],
+            [8, 5, 8],
+            DoubleArrayValueSemantics.Instance,
+            functions);
+    }
+
+    private static Genome<int[]> IntArrayScenarioGenome(IFunctionSet<int[]> functions)
+    {
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 8, OutputCount: 3, MaxArity: 3, LevelsBack: 8);
+        var constantId = IlgpuTestHelpers.FindFunctionId(functions, "const");
+        var absId = IlgpuTestHelpers.FindFunctionId(functions, "abs");
+        var divideId = IlgpuTestHelpers.FindFunctionId(functions, "divide");
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var greaterId = IlgpuTestHelpers.FindFunctionId(functions, "greater");
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+
+        return Genome<int[]>.FromGenes(
+            shape,
+            [constantId, absId, constantId, divideId, addId, greaterId, selectId, addId],
+            [
+                0, 0, 0,
+                2, 0, 0,
+                0, 0, 0,
+                2, 4, 0,
+                3, 5, 0,
+                0, 1, 0,
+                7, 6, 3,
+                3, 3, 0,
+            ],
+            [
+                [int.MinValue, int.MinValue, int.MinValue],
+                Array.Empty<int>(),
+                [-1, -1, -1],
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+                Array.Empty<int>(),
+            ],
+            [8, 6, 8],
+            Int32ArrayValueSemantics.Instance,
+            functions);
     }
 
     [Fact]
@@ -62,26 +147,13 @@ public sealed class IlgpuArrayParityTests
         for (var seed = 0UL; seed < 10; seed++)
         {
             var genome = RandomDoubleArray(seed, functions);
-            var expected = new double[Shape.OutputCount][];
-            var actual = new double[Shape.OutputCount][];
+            var expected = new double[RandomShape.OutputCount][];
+            var actual = new double[RandomShape.OutputCount][];
             reference.Evaluate(genome, inputs, expected);
             ilgpu.Evaluate(genome, inputs, actual);
             for (var o = 0; o < expected.Length; o++)
             {
-                Assert.Equal(expected[o].Length, actual[o].Length);
-                for (var i = 0; i < expected[o].Length; i++)
-                {
-                    var e = expected[o][i];
-                    var a = actual[o][i];
-                    Assert.Equal(double.IsFinite(e), double.IsFinite(a));
-                    if (!double.IsFinite(e))
-                    {
-                        continue;
-                    }
-
-                    var diff = Math.Abs(e - a);
-                    Assert.True(diff <= 1e-12 || diff <= 1e-12 * Math.Abs(e), $"seed {seed} out {o} lane {i}: expected {e}, actual {a}");
-                }
+                IlgpuTestHelpers.AssertDoubleArrayClose(expected[o], actual[o], $"seed {seed} output {o}");
             }
         }
     }
@@ -96,8 +168,8 @@ public sealed class IlgpuArrayParityTests
         for (var seed = 0UL; seed < 10; seed++)
         {
             var genome = RandomInt32Array(seed, functions);
-            var expected = new int[Shape.OutputCount][];
-            var actual = new int[Shape.OutputCount][];
+            var expected = new int[RandomShape.OutputCount][];
+            var actual = new int[RandomShape.OutputCount][];
             reference.Evaluate(genome, inputs, expected);
             ilgpu.Evaluate(genome, inputs, actual);
             for (var o = 0; o < expected.Length; o++)
@@ -105,5 +177,70 @@ public sealed class IlgpuArrayParityTests
                 Assert.Equal(expected[o], actual[o]);
             }
         }
+    }
+
+    [Fact]
+    public void Double_array_kernel_preserves_protected_functions_finiteness_order_counts_and_array_integrity()
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var genome = DoubleArrayScenarioGenome(functions);
+        var reference = new ReferenceGenomeEvaluator<double[]>(functions);
+        using var ilgpu = new IlgpuGenomeEvaluator<double[]>(functions);
+        var inputs = new[]
+        {
+            new[] { 8.0, -4.0, double.NaN },
+            new[] { 0.0, 2.0, 1.0 },
+        };
+        var originalInputs = inputs.Select(v => v.ToArray()).ToArray();
+        var expected = new double[3][];
+        var actual = new double[3][];
+        reference.Evaluate(genome, inputs, expected);
+        ilgpu.Evaluate(genome, inputs, actual);
+
+        for (var o = 0; o < expected.Length; o++)
+        {
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected[o], actual[o], $"output {o}");
+        }
+
+        Assert.Equal(actual[0], actual[2]);
+        IlgpuTestHelpers.AssertRealKernelExecution(ilgpu, genome, functions);
+        Assert.Equal(originalInputs[0], inputs[0]);
+        Assert.Equal(originalInputs[1], inputs[1]);
+
+        actual[0][0] = 12345.0;
+        var rerun = new double[3][];
+        ilgpu.Evaluate(genome, inputs, rerun);
+        IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], rerun[0], "rerun output 0");
+    }
+
+    [Fact]
+    public void Int_array_kernel_preserves_extremes_order_counts_and_call_isolation()
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var genome = IntArrayScenarioGenome(functions);
+        var reference = new ReferenceGenomeEvaluator<int[]>(functions);
+        using var ilgpu = new IlgpuGenomeEvaluator<int[]>(functions);
+        var inputs = new[]
+        {
+            new[] { 0, 2, 5 },
+            new[] { 1, 1, 3 },
+        };
+        var expected = new int[3][];
+        var actual = new int[3][];
+        reference.Evaluate(genome, inputs, expected);
+        ilgpu.Evaluate(genome, inputs, actual);
+
+        for (var o = 0; o < expected.Length; o++)
+        {
+            Assert.Equal(expected[o], actual[o]);
+        }
+
+        Assert.Equal(actual[0], actual[2]);
+        IlgpuTestHelpers.AssertRealKernelExecution(ilgpu, genome, functions);
+
+        actual[1][0] = 777;
+        var rerun = new int[3][];
+        ilgpu.Evaluate(genome, inputs, rerun);
+        Assert.Equal(expected[1], rerun[1]);
     }
 }

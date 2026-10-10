@@ -24,8 +24,13 @@ public static class Program
 
     private sealed record Workload(string Name, string Description, Genome<double> Genome, bool TreeCompare);
 
-    public static int Main()
+    public static int Main(string[]? args)
     {
+        if (args is { Length: > 0 } && string.Equals(args[0], "ilgpu", StringComparison.OrdinalIgnoreCase))
+        {
+            return IlgpuBenchmarkProgram.Run();
+        }
+
         var functions = StandardDoubleFunctionSet.Instance;
         var addId = FindAddFunctionId(functions);
 

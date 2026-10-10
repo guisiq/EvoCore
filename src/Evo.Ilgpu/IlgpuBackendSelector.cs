@@ -49,12 +49,24 @@ public static class IlgpuBackendSelector
     /// <summary>Selection resolved once per process, so every worker of a run uses the same device.</summary>
     public static IlgpuBackendSelection Selection => Cached.Value;
 
-    private static IlgpuBackendSelection Probe()
+    internal static IlgpuBackendSelection ProbeForTests(
+        Func<Context> contextFactory,
+        Func<Context, int, Accelerator> acceleratorFactory) =>
+        Probe(contextFactory, acceleratorFactory);
+
+    private static IlgpuBackendSelection Probe() =>
+        Probe(
+            () => Context.Create(builder => builder.OpenCL().CPU()),
+            static (context, index) => context.Devices[index].CreateAccelerator(context));
+
+    private static IlgpuBackendSelection Probe(
+        Func<Context> contextFactory,
+        Func<Context, int, Accelerator> acceleratorFactory)
     {
         string? openClFailure = null;
         try
         {
-            using var context = Context.Create(builder => builder.OpenCL().CPU());
+            using var context = contextFactory();
             var devices = context.Devices.ToArray();
             string? unusable = null;
             for (var i = 0; i < devices.Length; i++)
@@ -66,7 +78,7 @@ public static class IlgpuBackendSelector
 
                 try
                 {
-                    using var probe = devices[i].CreateAccelerator(context);
+                    using var probe = acceleratorFactory(context, i);
                     return new IlgpuBackendSelection(IlgpuBackendKind.OpenClDevice, i, devices[i].Name, null);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -80,7 +92,19 @@ public static class IlgpuBackendSelector
             {
                 if (devices[i].AcceleratorType.ToString() == "CPU")
                 {
-                    return new IlgpuBackendSelection(IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, openClFailure);
+                    try
+                    {
+                        using var probe = acceleratorFactory(context, i);
+                        return new IlgpuBackendSelection(IlgpuBackendKind.IlgpuCpu, i, devices[i].Name, openClFailure);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        return new IlgpuBackendSelection(
+                            IlgpuBackendKind.CpuFallback,
+                            -1,
+                            "nenhum",
+                            $"{openClFailure}; acelerador CPU do ILGPU não inicializável: {ex.GetType().Name}");
+                    }
                 }
             }
 

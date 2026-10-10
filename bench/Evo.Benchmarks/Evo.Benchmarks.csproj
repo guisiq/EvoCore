@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Evo.Core\Evo.Core.csproj" />
+    <ProjectReference Include="..\..\src\Evo.Ilgpu\Evo.Ilgpu.csproj" />
   </ItemGroup>
 
 </Project>

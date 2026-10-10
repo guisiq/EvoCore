@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading;
 using Evo.Core.Functions;
 using Evo.Core.Values;
@@ -74,10 +75,9 @@ internal sealed class QuadraticFitness : IFitnessEvaluator<double>
 internal sealed class CountingFitness : IFitnessEvaluator<double>
 {
     private readonly QuadraticFitness _inner = new();
-    private readonly Dictionary<string, int> _counts;
-    private readonly object _lock = new();
+    private readonly ConcurrentDictionary<string, int> _counts;
 
-    public CountingFitness(Dictionary<string, int> counts)
+    public CountingFitness(ConcurrentDictionary<string, int> counts)
     {
         _counts = counts;
     }
@@ -85,10 +85,7 @@ internal sealed class CountingFitness : IFitnessEvaluator<double>
     public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
     {
         var key = Convert.ToHexString(genome.ComputePhenotypeFingerprint(StandardDoubleFunctionSet.Instance, DoubleValueSemantics.Instance));
-        lock (_lock)
-        {
-            _counts[key] = _counts.GetValueOrDefault(key) + 1;
-        }
+        _counts.AddOrUpdate(key, 1, static (_, current) => current + 1);
 
         return _inner.Evaluate(genome, evaluator, cancellationToken);
     }
@@ -431,7 +428,7 @@ public sealed class EvolutionEngineTests
         Assert.True(evaluations < options.PopulationSize * (options.MaxGenerations + 1));
     }
 
-    private static EvolutionTestProblem<double> CountingProblem(Dictionary<string, int> counts) => new(
+    private static EvolutionTestProblem<double> CountingProblem(ConcurrentDictionary<string, int> counts) => new(
         Shape,
         StandardDoubleFunctionSet.Instance,
         DoubleValueSemantics.Instance,
@@ -463,11 +460,11 @@ public sealed class EvolutionEngineTests
     public void Evolution_elites_are_copied_unchanged()
     {
         // Com EliteCount == PopulationSize, a geração g+1 é só clone da g: nenhum cruzamento ou mutação.
-        var counts0 = new Dictionary<string, int>();
+        var counts0 = new ConcurrentDictionary<string, int>();
         var options0 = Options(1) with { PopulationSize = 10, EliteCount = 10, MaxGenerations = 0 };
         var first = new EvolutionEngine<double>().Run(CountingProblem(counts0), options0);
 
-        var counts1 = new Dictionary<string, int>();
+        var counts1 = new ConcurrentDictionary<string, int>();
         var second = new EvolutionEngine<double>().Run(CountingProblem(counts1), options0 with { MaxGenerations = 1 });
 
         Assert.Equal(counts0.Values.Sum(), counts1.Values.Sum());
@@ -529,14 +526,14 @@ public sealed class EvolutionEngineTests
         }
 
         // Geração 0: indivíduos com a mesma fingerprint são avaliados uma única vez; cada fingerprint distinta é avaliada.
-        var counts0 = new Dictionary<string, int>();
+        var counts0 = new ConcurrentDictionary<string, int>();
         new EvolutionEngine<double>().Run(CountingProblem(counts0), Options(2) with { MaxGenerations = 0 });
         Assert.Equal(distinct.Count, counts0.Count);
         Assert.All(counts0.Values, c => Assert.Equal(1, c));
         Assert.Equal(distinct.OrderBy(k => k, StringComparer.Ordinal), counts0.Keys.OrderBy(k => k, StringComparer.Ordinal));
 
         // Execução completa: o cache deve reduzir avaliações e manter todas as fingerprints avaliadas.
-        var counts = new Dictionary<string, int>();
+        var counts = new ConcurrentDictionary<string, int>();
         var options = Options(2);
         new EvolutionEngine<double>().Run(CountingProblem(counts), options);
         Assert.True(counts.Values.Sum() < options.PopulationSize * (options.MaxGenerations + 1));
