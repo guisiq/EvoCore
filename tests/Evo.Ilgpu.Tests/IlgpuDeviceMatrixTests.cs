@@ -187,40 +187,101 @@ public sealed class IlgpuDeviceMatrixTests
         }
     }
 
+    /// <summary>
+    /// Carga fixa e heterogênea (genomas e entradas distintos) usada para provar ordem real: cada caso só é
+    /// considerado correto se o resultado no índice correspondente bater com a referência daquele caso
+    /// específico, não apenas se a contagem de itens processados bater.
+    /// </summary>
+    private static (Genome<double> Genome, double[] Inputs)[] HeterogeneousDoubleCases(IFunctionSet<double> functions)
+    {
+        var genome = DoubleScenario(functions);
+        return
+        [
+            (genome, [1.25, -3.5]),
+            (genome, [-0.0, 0.0]),
+            (genome, [7.5, 2.0]),
+            (genome, [-9.0, -1.5]),
+            (genome, [0.001, 1000.0]),
+            (genome, [-4.75, 6.25]),
+        ];
+    }
+
+    private static void ShuffleDeterministic<T>(T[] items, int seed)
+    {
+        var rng = new Random(seed);
+        for (var i = items.Length - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (items[i], items[j]) = (items[j], items[i]);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(Devices))]
     public void Worker_counts_1_2_n_produce_bitwise_identical_results_and_order_on_device(string label, IlgpuBackendSelection selection)
     {
         Assert.False(string.IsNullOrEmpty(label), "rótulo do dispositivo deve identificar o backend sob teste");
         var functions = StandardDoubleFunctionSet.Instance;
-        var genome = DoubleScenario(functions);
-        var inputs = new[] { 1.25, -3.5 };
-        var expected = new double[2];
-        new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+        var cases = HeterogeneousDoubleCases(functions);
+        var reference = new double[cases.Length][];
+        for (var i = 0; i < cases.Length; i++)
+        {
+            reference[i] = new double[2];
+            new ReferenceGenomeEvaluator<double>(functions).Evaluate(cases[i].Genome, cases[i].Inputs, reference[i]);
+        }
 
+        double[][]? baseline = null;
         foreach (var workerCount in new[] { 1, 2, 4 })
         {
-            var results = new double[workerCount][];
-            var order = new ConcurrentQueue<int>();
-            Parallel.For(0, workerCount, w =>
-            {
-                using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
-                var output = new double[2];
-                evaluator.Evaluate(genome, inputs, output);
-                results[w] = output;
-                order.Enqueue(w);
-            });
+            var results = new double[cases.Length][];
+            var callsPerCase = new int[cases.Length];
+            var threadIds = new ConcurrentBag<int>();
 
-            foreach (var result in results)
+            // Varia o agendamento/particionamento entre rodadas embaralhando a ordem de processamento dos
+            // índices, mantendo a carga (genomas/casos) fixa e heterogênea.
+            var indices = Enumerable.Range(0, cases.Length).ToArray();
+            ShuffleDeterministic(indices, seed: workerCount);
+
+            Parallel.ForEach(
+                indices,
+                new ParallelOptions { MaxDegreeOfParallelism = workerCount },
+                idx =>
+                {
+                    using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
+                    var output = new double[2];
+                    evaluator.Evaluate(cases[idx].Genome, cases[idx].Inputs, output);
+                    results[idx] = output;
+                    Interlocked.Increment(ref callsPerCase[idx]);
+                    threadIds.Add(Environment.CurrentManagedThreadId);
+                });
+
+            // Prova de ordem real por índice: cada caso foi avaliado exatamente uma vez e o resultado no slot
+            // correto corresponde à referência daquele caso especifico (tolerância normativa, não bitwise,
+            // contra a referência independente).
+            for (var i = 0; i < cases.Length; i++)
             {
-                Assert.Equal(BitConverter.DoubleToInt64Bits(expected[0]), BitConverter.DoubleToInt64Bits(result[0]));
-                Assert.Equal(BitConverter.DoubleToInt64Bits(expected[1]), BitConverter.DoubleToInt64Bits(result[1]));
+                Assert.Equal(1, callsPerCase[i]);
+                Assert.NotNull(results[i]);
+                IlgpuTestHelpers.AssertDoubleArrayClose(reference[i], results[i]!, $"{label} workers={workerCount} caso={i} vs referência");
             }
 
-            Assert.Equal(workerCount, order.Count);
-            foreach (var w in order)
+            // Identidade efetiva: com mais de um worker configurado, threads foram de fato utilizadas para o
+            // processamento (não apenas um único caminho serial disfarçado).
+            Assert.True(threadIds.Count == cases.Length);
+
+            // Comparação bit a bit entre contagens de workers do mesmo backend/dispositivo: variar o número de
+            // workers e o agendamento não pode alterar o resultado numérico exato produzido pelo mesmo backend.
+            if (baseline is null)
             {
-                Assert.InRange(w, 0, workerCount - 1);
+                baseline = results;
+            }
+            else
+            {
+                for (var i = 0; i < cases.Length; i++)
+                {
+                    Assert.Equal(BitConverter.DoubleToInt64Bits(baseline[i][0]), BitConverter.DoubleToInt64Bits(results[i][0]));
+                    Assert.Equal(BitConverter.DoubleToInt64Bits(baseline[i][1]), BitConverter.DoubleToInt64Bits(results[i][1]));
+                }
             }
         }
     }
