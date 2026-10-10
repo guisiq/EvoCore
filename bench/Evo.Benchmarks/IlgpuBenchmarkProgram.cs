@@ -240,6 +240,7 @@ internal static class IlgpuBenchmarkProgram
             action();
         }
 
+        var allocBefore = GC.GetAllocatedBytesForCurrentThread();
         var sw = Stopwatch.StartNew();
         for (var i = 0; i < MeasureRepetitions; i++)
         {
@@ -247,8 +248,10 @@ internal static class IlgpuBenchmarkProgram
         }
 
         sw.Stop();
+        var allocTotal = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
         var nsPerEval = sw.Elapsed.TotalMilliseconds * 1_000_000.0 / MeasureRepetitions;
-        Console.WriteLine($"tipo={type} parity=PASS backend={backend} device={device} fallbackKind={fallbackKind} fallback={(fallbackReason ?? "(nenhum)")} ns/avaliacao={nsPerEval:F1} total_ms={sw.Elapsed.TotalMilliseconds:F2}");
+        var bytesPerEval = (double)allocTotal / MeasureRepetitions;
+        Console.WriteLine($"tipo={type} parity=PASS backend={backend} device={device} fallbackKind={fallbackKind} fallback={(fallbackReason ?? "(nenhum)")} ns/avaliacao={nsPerEval:F1} total_ms={sw.Elapsed.TotalMilliseconds:F2} bytes_alocados/avaliacao={bytesPerEval:F1} bytes_alocados_total={allocTotal}");
     }
 
     private static int FindFunctionId<T>(IFunctionSet<T> functions, string part)
