@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "ILGPU": {
+        "type": "Direct",
+        "requested": "[1.2.0, )",
+        "resolved": "1.2.0",
+        "contentHash": "/iHB9lp2yBq0yWiIEV2Fam3Mcjlqxl9lGi5tZOr8f1fHl6IpaHjDgH1osU1gGStifPZNmH9TKqiuLYSAdeNO4g=="
+      },
+      "evo.core": {
+        "type": "Project"
+      }
+    }
+  }
+}
