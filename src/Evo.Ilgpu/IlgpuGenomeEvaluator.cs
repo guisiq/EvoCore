@@ -513,7 +513,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
 
     private static double DoubleOp(int op, double x0, double x1, double x2)
     {
-        var nan = x0 != x0 || x1 != x1;
+        var nan = double.IsNaN(x0) || double.IsNaN(x1);
         switch (op)
         {
             case OpAdd: return x0 + x1;
@@ -525,8 +525,8 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             case OpNegate: return -x0;
             case OpAbs: return Math.Abs(x0);
             case OpSquare: return x0 * x0;
-            case OpProtectedSqrt: return x0 != x0 ? x0 : Math.Sqrt(Math.Abs(x0));
-            case OpProtectedLog: return x0 != x0 ? x0 : Math.Log(Math.Abs(x0) + 1e-12);
+            case OpProtectedSqrt: return double.IsNaN(x0) ? x0 : Math.Sqrt(Math.Abs(x0));
+            case OpProtectedLog: return double.IsNaN(x0) ? x0 : Math.Log(Math.Abs(x0) + 1e-12);
             case OpMin:
                 if (nan) return x0 + x1;
                 return x0 < x1 ? x0 : x1;
