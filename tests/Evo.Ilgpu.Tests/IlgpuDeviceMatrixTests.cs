@@ -34,12 +34,69 @@ public sealed class IlgpuDeviceMatrixTests
             .Where(entry => entry[2] is not null)
             .Select(entry => new object[] { entry[0]!, entry[2]! });
 
+    /// <summary>
+    /// Indisponibilidade é resultado observável, não falha: cada linha indisponível carrega rótulo (identidade) e
+    /// causa, e nunca entra no conjunto aprovado da matriz. A ausência de OpenCL neste PC não reprova o gate.
+    /// </summary>
     [Fact]
     public void Unavailable_devices_are_reported_with_cause_and_never_approved()
     {
-        var unavailable = UnavailableDevices().Select(row => $"{row[0]}: {row[1]}").ToArray();
-        Assert.Empty(unavailable);
+        foreach (var row in UnavailableDevices())
+        {
+            var label = Assert.IsType<string>(row[0]);
+            var cause = Assert.IsType<string>(row[1]);
+            Assert.False(string.IsNullOrWhiteSpace(label), "linha indisponível deve ter identidade");
+            Assert.False(string.IsNullOrWhiteSpace(cause), $"{label} deve registrar a causa da indisponibilidade");
+            Assert.DoesNotContain(Devices(), approved => (string)approved[0] == label);
+        }
     }
+
+    /// <summary>Somente-CPU/sem OpenCL: a linha OpenCL fica indisponível com causa e a CPU continua aprovada.</summary>
+    [Fact]
+    public void Cpu_only_host_reports_opencl_unavailable_with_cause_and_keeps_cpu_approved()
+    {
+        var cpuEntry = new IlgpuDeviceCatalog.CatalogEntry("ILGPU/CPU", CpuSelection(), null);
+        var entries = new List<IlgpuDeviceCatalog.CatalogEntry>
+        {
+            cpuEntry,
+        };
+        entries.AddRange(IlgpuDeviceCatalog.BuildOpenClEntries([], _ => null));
+
+        var approved = entries.Where(IlgpuDeviceCatalog.IsApproved).Select(e => e.Label).ToArray();
+        var unavailable = entries.Where(e => !IlgpuDeviceCatalog.IsApproved(e)).ToArray();
+
+        Assert.Equal(new[] { "ILGPU/CPU" }, approved);
+        var openClRow = Assert.Single(unavailable);
+        Assert.Contains("OpenCL", openClRow.Label);
+        Assert.Equal("nenhum dispositivo OpenCL encontrado pelo runtime ILGPU", openClRow.UnavailableCause);
+        Assert.Null(openClRow.Selection);
+    }
+
+    /// <summary>Candidato OpenCL inutilizável ao lado da CPU: causa visível com identidade, sem aprovação, CPU segue aprovada.</summary>
+    [Fact]
+    public void Unusable_opencl_candidate_reports_cause_identity_and_keeps_cpu_tests_running()
+    {
+        var unusable = new IlgpuBackendSelection(
+            IlgpuBackendKind.OpenClDevice, 0, "GPU Falha", null, 0, 256, 4, 256, 0,
+            PlatformName: "Plataforma Y", PlatformId: "p-1", OpenClDeviceId: "d-9");
+        var entries = new List<IlgpuDeviceCatalog.CatalogEntry>
+        {
+            new("ILGPU/CPU", CpuSelection(), null),
+        };
+        entries.AddRange(IlgpuDeviceCatalog.BuildOpenClEntries([unusable], _ => new InvalidOperationException()));
+
+        var approved = entries.Where(IlgpuDeviceCatalog.IsApproved).ToArray();
+        var unavailable = entries.Where(e => !IlgpuDeviceCatalog.IsApproved(e)).ToArray();
+
+        Assert.Equal(new[] { "ILGPU/CPU" }, approved.Select(e => e.Label));
+        var row = Assert.Single(unavailable);
+        Assert.Contains("Plataforma Y :: GPU Falha", row.Label);
+        Assert.Contains("deviceId=d-9", row.Label);
+        Assert.Contains("InvalidOperationException", row.UnavailableCause);
+    }
+
+    private static IlgpuBackendSelection CpuSelection() =>
+        new(IlgpuBackendKind.IlgpuCpu, 0, "CPU ILGPU", null, 8, 8, 1, 8, 4);
 
     private static Genome<double> DoubleScenario(IFunctionSet<double> functions)
     {

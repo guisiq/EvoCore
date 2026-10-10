@@ -21,6 +21,9 @@ public static class IlgpuDeviceCatalog
         }
     }
 
+    /// <summary>Entrada aprovável: seleção presente e sem causa de indisponibilidade.</summary>
+    public static bool IsApproved(CatalogEntry entry) => entry.Selection is not null && entry.UnavailableCause is null;
+
     public static IReadOnlyList<CatalogEntry> Probe()
     {
         var entries = new List<CatalogEntry>();
@@ -29,21 +32,94 @@ public static class IlgpuDeviceCatalog
             ? new CatalogEntry("ILGPU/CPU", cpu, null)
             : new CatalogEntry("ILGPU/CPU", null, "acelerador CPU do ILGPU indisponível: " + cpuError));
 
-        var processSelection = IlgpuBackendSelector.Selection;
-        if (processSelection.Kind == IlgpuBackendKind.OpenClDevice)
+        try
         {
-            entries.Add(new CatalogEntry("ILGPU/OpenCL:" + processSelection.DiagnosticDeviceName, processSelection, null));
+            using var context = Context.Create(builder => builder.OpenCL().CPU());
+            var devices = context.Devices.ToArray();
+            var openClCandidates = new List<IlgpuBackendSelection>();
+            for (var i = 0; i < devices.Length; i++)
+            {
+                if (devices[i] is CLDevice openCl)
+                {
+                    openClCandidates.Add(CreateOpenClSelection(openCl, i));
+                }
+            }
+
+            entries.AddRange(BuildOpenClEntries(openClCandidates, candidate =>
+            {
+                try
+                {
+                    using var accelerator = devices[candidate.DeviceIndex].CreateAccelerator(context);
+                    return null;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    return ex;
+                }
+            }));
         }
-        else
+        catch (Exception ex)
         {
             entries.Add(new CatalogEntry(
                 "ILGPU/OpenCL:indisponível",
                 null,
-                "nenhum dispositivo OpenCL utilizável: " + processSelection.FallbackReason));
+                "falha de inicialização do runtime ILGPU/OpenCL: " + ex.GetType().Name));
         }
 
         return entries;
     }
+
+    /// <summary>
+    /// Converte cada dispositivo OpenCL enumerado em uma linha do catálogo, com identidade completa e causa
+    /// individual quando o candidato não é utilizável. Não depende da seleção global do processo: um candidato
+    /// inutilizável não oculta os demais. Sem candidatos, registra uma única linha indisponível com a causa.
+    /// </summary>
+    internal static IReadOnlyList<CatalogEntry> BuildOpenClEntries(
+        IEnumerable<IlgpuBackendSelection> openClCandidates,
+        Func<IlgpuBackendSelection, Exception?> validator)
+    {
+        var entries = new List<CatalogEntry>();
+        foreach (var candidate in openClCandidates)
+        {
+            var label = "ILGPU/OpenCL:" + DescribeOpenClIdentity(candidate);
+            var error = validator(candidate);
+            entries.Add(error is null
+                ? new CatalogEntry(label, candidate, null)
+                : new CatalogEntry(
+                    label,
+                    candidate,
+                    $"dispositivo OpenCL '{DescribeOpenClIdentity(candidate)}' não utilizável: {error.GetType().Name}"));
+        }
+
+        if (entries.Count == 0)
+        {
+            entries.Add(new CatalogEntry(
+                "ILGPU/OpenCL:indisponível",
+                null,
+                "nenhum dispositivo OpenCL encontrado pelo runtime ILGPU"));
+        }
+
+        return entries;
+    }
+
+    /// <summary>Identidade textual completa: plataforma, nome e identificadores OpenCL (distingue homônimos).</summary>
+    internal static string DescribeOpenClIdentity(IlgpuBackendSelection selection) =>
+        $"{selection.PlatformName} :: {selection.DeviceName} [platformId={selection.PlatformId}, deviceId={selection.OpenClDeviceId}]";
+
+    private static IlgpuBackendSelection CreateOpenClSelection(CLDevice device, int index) =>
+        new(
+            IlgpuBackendKind.OpenClDevice,
+            index,
+            device.Name,
+            null,
+            device.WarpSize,
+            device.MaxNumThreads,
+            device.NumMultiprocessors,
+            device.MaxNumThreadsPerGroup,
+            CpuNumThreads: 0,
+            PlatformName: device.PlatformName,
+            PlatformId: device.PlatformId.ToString(),
+            OpenClDeviceId: device.DeviceId.ToString());
 
     private static IlgpuBackendSelection? TryCpuSelection(out string? error)
     {

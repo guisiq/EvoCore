@@ -113,6 +113,28 @@ public sealed class OpenClDeviceCatalogTests
     }
 
     [Fact]
+    public void Homonymous_opencl_candidates_each_keep_their_identity_and_unusable_is_visible()
+    {
+        var first = new IlgpuBackendSelection(
+            IlgpuBackendKind.OpenClDevice, 0, "Mesmo Nome", null, 0, 256, 4, 256, 0,
+            PlatformName: "Plataforma X", PlatformId: "p-0", OpenClDeviceId: "d-0");
+        var second = first with { PlatformId = "p-1", OpenClDeviceId = "d-1" };
+        var broken = first with { PlatformId = "p-2", OpenClDeviceId = "d-2", DeviceIndex = 2 };
+
+        var entries = IlgpuDeviceCatalog.BuildOpenClEntries(
+            [first, second, broken],
+            candidate => candidate.OpenClDeviceId == "d-2" ? new InvalidOperationException() : null);
+
+        Assert.Equal(3, entries.Count);
+        Assert.Equal(2, entries.Count(IlgpuDeviceCatalog.IsApproved));
+        Assert.Equal(3, entries.Select(e => e.Label).Distinct().Count());
+        Assert.Equal(first, entries[0].Selection);
+        Assert.Equal(second, entries[1].Selection);
+        Assert.Contains("d-2", entries[2].Label);
+        Assert.Contains("InvalidOperationException", entries[2].UnavailableCause);
+    }
+
+    [Fact]
     public void Device_identity_is_stable_across_independent_contexts()
     {
         using var contextA = Context.Create(builder => builder.OpenCL().CPU());
