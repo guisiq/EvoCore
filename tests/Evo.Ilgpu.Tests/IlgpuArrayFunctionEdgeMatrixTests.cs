@@ -141,6 +141,172 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         return Genome<T>.FromGenes(shape, [functionId], [0, 1, 1], [constant], [2], semantics, functions);
     }
 
+    /// <summary>Genoma mínimo com conexões e número de inputs explícitos (R7-1/R7-2): casos discriminantes de
+    /// Select (três ramos distintos), ProtectedDivide perto do EPS e comprimentos incompatíveis em Select/Constant.</summary>
+    private static Genome<T> SingleNodeArrayGenomeWithInputs<T>(IFunctionSet<T> functions, int functionId, int inputCount, int[] connections, T constant, IValueSemantics<T> semantics)
+    {
+        var shape = new GenomeShape(InputCount: inputCount, NodeCount: 1, OutputCount: 1, MaxArity: connections.Length, LevelsBack: 1);
+        return Genome<T>.FromGenes(shape, [functionId], connections, [constant], [inputCount], semantics, functions);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_double_array_discriminates_three_distinct_branches_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
+        var aBranch = new[] { 10.0, 20.0, 30.0 };
+        var bBranch = new[] { -10.0, -20.0, -30.0 };
+        var cases = new (double[] c, double[] expectedBranch)[]
+        {
+            ([5.0, 5.0, 5.0], aBranch),
+            ([0.0, 0.0, 0.0], bBranch),
+            ([-3.0, -3.0, -3.0], bBranch),
+            ([double.NaN, double.NaN, double.NaN], bBranch),
+        };
+        foreach (var (c, expectedBranch) in cases)
+        {
+            var inputs = new[] { c, aBranch, bBranch };
+            var expected = new double[1][];
+            var compiled = new double[1][];
+            var device = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            var tag = $"{label} select array c={Describe(c)}";
+            AssertDeviceKernel(evaluator, genome, functions, selection, tag);
+            Assert.Equal(expectedBranch, expected[0]);
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], compiled[0], $"{tag} compiled");
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], device[0], $"{tag} device");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_int_array_discriminates_three_distinct_branches_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
+        var aBranch = new[] { 100, 200, 300 };
+        var bBranch = new[] { -100, -200, -300 };
+        var cases = new (int[] c, int[] expectedBranch)[]
+        {
+            ([5, 5, 5], aBranch),
+            ([0, 0, 0], bBranch),
+            ([-3, -3, -3], bBranch),
+        };
+        foreach (var (c, expectedBranch) in cases)
+        {
+            var inputs = new[] { c, aBranch, bBranch };
+            var expected = new int[1][];
+            var compiled = new int[1][];
+            var device = new int[1][];
+            new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            var tag = $"{label} select array c={Describe(c)}";
+            AssertDeviceKernel(evaluator, genome, functions, selection, tag);
+            Assert.Equal(expectedBranch, expected[0]);
+            Assert.Equal(expected[0], compiled[0]);
+            Assert.Equal(expected[0], device[0]);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void ProtectedDivide_double_array_near_eps_boundary_on_device(string label, IlgpuBackendSelection selection)
+    {
+        const double Eps = 1e-12;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var divId = IlgpuTestHelpers.FindFunctionId(functions, "protecteddivide");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, divId, 2, [0, 1], Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
+        var numerator = new[] { 3.0, 3.0, 3.0 };
+        var denominators = new[]
+        {
+            new[] { Eps * 0.5, -Eps * 0.5, Eps },
+            new[] { -Eps, Eps * 1.5, -Eps * 1.5 },
+        };
+        foreach (var denom in denominators)
+        {
+            var inputs = new[] { numerator, denom };
+            var expected = new double[1][];
+            var compiled = new double[1][];
+            var device = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            var tag = $"{label} protecteddivide array denom={Describe(denom)}";
+            AssertDeviceKernel(evaluator, genome, functions, selection, tag);
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], compiled[0], $"{tag} compiled");
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], device[0], $"{tag} device");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Mismatched_array_lengths_int_fall_back_and_match_reference_failure_without_counting_as_device_coverage(string label, IlgpuBackendSelection selection)
+    {
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var genome = SingleNodeArrayGenome(functions, addId, [1, 2], Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1, 2 }, new[] { 1, 2, 3 } };
+        var output = new int[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_array_mismatched_argument_lengths_fall_back_and_match_reference_failure_without_counting_as_device_coverage(string label, IlgpuBackendSelection selection)
+    {
+        _ = label;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
+        // Condição e ramo "a" com comprimento 3, ramo "b" com comprimento 2 (incompatível).
+        var inputs = new[] { new[] { 1.0, 1.0, 1.0 }, new[] { 10.0, 20.0, 30.0 }, new[] { -10.0, -20.0 } };
+        var output = new double[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Constant_array_length_mismatch_with_sibling_input_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Genoma de dois nós: node0=Constant(comprimento 2), node1=Add(node0, input0) com input0 de comprimento 3:
+        // o comprimento do parâmetro Constant difere do comprimento da entrada usada no mesmo cálculo.
+        _ = label;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var constId = IlgpuTestHelpers.FindFunctionId(functions, "constant");
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var shape = new GenomeShape(InputCount: 1, NodeCount: 2, OutputCount: 1, MaxArity: 2, LevelsBack: 3);
+        var genome = Genome<double[]>.FromGenes(
+            shape,
+            [constId, addId],
+            [0, 0, 0, 1],
+            [new[] { 1.0, 2.0 }, Array.Empty<double>()],
+            [2],
+            DoubleArrayValueSemantics.Instance,
+            functions);
+        var inputs = new[] { new[] { 1.0, 2.0, 3.0 } };
+        var output = new double[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+    }
+
     private static void AssertDeviceKernel<T>(IlgpuGenomeEvaluator<T> evaluator, Genome<T> genome, IFunctionSet<T> functions, IlgpuBackendSelection selection, string tag)
     {
         IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
