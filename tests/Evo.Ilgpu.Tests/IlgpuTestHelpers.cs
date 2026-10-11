@@ -51,6 +51,21 @@ internal static class IlgpuTestHelpers
         }
     }
 
+    /// <summary>
+    /// R9-2: comparação bit a bit (sem tolerância) usada para provar ausência de mutação entre
+    /// chamadas sucessivas de snapshots já retidos de reference/compiled/device.
+    /// </summary>
+    public static void AssertDoubleArrayBitExact(double[] expected, double[] actual, string prefix)
+    {
+        Assert.Equal(expected.Length, actual.Length);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            Assert.True(
+                BitConverter.DoubleToInt64Bits(expected[i]) == BitConverter.DoubleToInt64Bits(actual[i]),
+                $"{prefix} lane {i}: bits divergentes, esperado {expected[i]:R}, atual {actual[i]:R}");
+        }
+    }
+
     public static void AssertRealKernelExecution<T>(IlgpuGenomeEvaluator<T> evaluator, Genome<T> genome, IFunctionSet<T> functions)
     {
         Assert.True(evaluator.LastEvaluationUsedDevice);
