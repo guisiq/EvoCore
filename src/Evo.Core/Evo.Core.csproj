@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Evo.Core.Tests" />
+    <InternalsVisibleTo Include="Evo.Ilgpu.Tests" />
   </ItemGroup>
 
 </Project>
