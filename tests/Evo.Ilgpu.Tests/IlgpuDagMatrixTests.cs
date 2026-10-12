@@ -296,6 +296,7 @@ public sealed class IlgpuDagMatrixTests
         IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Reference, out1Again.Reference, $"{label} double A retorno deve repetir saída reference do lote1");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Compiled, out1Again.Compiled, $"{label} double A retorno deve repetir saída compiled do lote1");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Device, out1Again.Device, $"{label} double A retorno deve repetir saída device do lote1");
+        AssertSnapshotUnchanged($"{label} double A lote1 pós-retorno", out1, out1Snapshot);
         AssertSnapshotUnchanged($"{label} double B pós-retorno a A", outB, outBSnapshot);
         AssertSnapshotUnchanged($"{label} double A lote2 pós-retorno", out2, out2Snapshot);
         IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy, inputs1, $"{label} double A retorno inputs");
@@ -359,6 +360,7 @@ public sealed class IlgpuDagMatrixTests
         Assert.Equal(out1Snapshot.Reference, out1Again.Reference);
         Assert.Equal(out1Snapshot.Compiled, out1Again.Compiled);
         Assert.Equal(out1Snapshot.Device, out1Again.Device);
+        AssertSnapshotUnchanged($"{label} int A lote1 pós-retorno", out1, out1Snapshot);
         AssertSnapshotUnchanged($"{label} int B pós-retorno a A", outB, outBSnapshot);
         AssertSnapshotUnchanged($"{label} int A lote2 pós-retorno", out2, out2Snapshot);
         Assert.Equal(inputs1Copy, inputs1);
@@ -426,6 +428,7 @@ public sealed class IlgpuDagMatrixTests
         AssertJaggedEqual(out1Snapshot.Reference, out1Again.Reference, $"{label} double[] A retorno reference");
         AssertJaggedEqual(out1Snapshot.Compiled, out1Again.Compiled, $"{label} double[] A retorno compiled");
         AssertJaggedEqual(out1Snapshot.Device, out1Again.Device, $"{label} double[] A retorno device");
+        AssertArraySnapshotUnchanged($"{label} double[] A lote1 pós-retorno", out1, out1Snapshot);
         AssertArraySnapshotUnchanged($"{label} double[] B pós-retorno a A", outB, outBSnapshot);
         AssertArraySnapshotUnchanged($"{label} double[] A lote2 pós-retorno", out2, out2Snapshot);
         for (var i = 0; i < inputs1.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy[i], inputs1[i], $"{label} double[] A retorno inputs[{i}]");
@@ -494,6 +497,7 @@ public sealed class IlgpuDagMatrixTests
         AssertJaggedEqual(out1Snapshot.Reference, out1Again.Reference, $"{label} int[] A retorno reference");
         AssertJaggedEqual(out1Snapshot.Compiled, out1Again.Compiled, $"{label} int[] A retorno compiled");
         AssertJaggedEqual(out1Snapshot.Device, out1Again.Device, $"{label} int[] A retorno device");
+        AssertArraySnapshotUnchanged($"{label} int[] A lote1 pós-retorno", out1, out1Snapshot);
         AssertArraySnapshotUnchanged($"{label} int[] B pós-retorno a A", outB, outBSnapshot);
         AssertArraySnapshotUnchanged($"{label} int[] A lote2 pós-retorno", out2, out2Snapshot);
         for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
