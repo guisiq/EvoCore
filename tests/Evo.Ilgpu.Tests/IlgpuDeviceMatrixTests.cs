@@ -4,6 +4,7 @@ using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
 using ILGPU.Runtime.OpenCL;
 using Evo.Core;
+using Evo.Core.Compiled;
 using Evo.Core.Functions;
 using Evo.Core.Values;
 using Evo.Ilgpu;
@@ -101,6 +102,13 @@ public sealed class IlgpuDeviceMatrixTests
         Assert.Contains("InvalidOperationException", row.UnavailableCause);
     }
 
+    private static void AssertDeviceEvaluation<T>(IlgpuGenomeEvaluator<T> evaluator, Genome<T> genome, IFunctionSet<T> functions, IlgpuBackendSelection selection)
+    {
+        IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+        Assert.Equal(selection.BackendName, evaluator.Backend);
+        Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
+    }
+
     private static IlgpuBackendSelection CpuSelection() =>
         new(IlgpuBackendKind.IlgpuCpu, 0, "CPU ILGPU", null, 8, 8, 1, 8, 4);
 
@@ -157,6 +165,9 @@ public sealed class IlgpuDeviceMatrixTests
             new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
             using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
+            IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
             IlgpuTestHelpers.AssertDoubleArrayClose(expected, actual, $"{label} double");
         }
 
@@ -169,6 +180,7 @@ public sealed class IlgpuDeviceMatrixTests
             new ReferenceGenomeEvaluator<int>(functions).Evaluate(genome, inputs, expected);
             using var evaluator = new IlgpuGenomeEvaluator<int>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
             Assert.Equal(expected, actual);
         }
 
@@ -181,6 +193,7 @@ public sealed class IlgpuDeviceMatrixTests
             new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
             using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
             Assert.Equal(expected[0], actual[0]);
         }
 
@@ -193,7 +206,81 @@ public sealed class IlgpuDeviceMatrixTests
             new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
             using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
             evaluator.Evaluate(genome, inputs, actual);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
             Assert.Equal(expected[0], actual[0]);
+        }
+    }
+
+    /// <summary>
+    /// Compiled CPU é um caminho distinto da referência: ambos devem produzir a mesma saída para os 4 tipos,
+    /// e o ILGPU do dispositivo deve igualar as duas.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Compiled_cpu_and_device_match_reference_for_four_types(string label, IlgpuBackendSelection selection)
+    {
+        {
+            var functions = StandardDoubleFunctionSet.Instance;
+            var genome = DoubleScenario(functions);
+            var inputs = new[] { 3.0, -0.5 };
+            var expected = new double[2];
+            var compiled = new double[2];
+            var device = new double[2];
+            new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double>(functions, DoubleValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected, compiled, $"{label} compiled double");
+            IlgpuTestHelpers.AssertDoubleArrayClose(expected, device, $"{label} device double");
+        }
+
+        {
+            var functions = StandardInt32FunctionSet.Instance;
+            var genome = IntScenario(functions);
+            var inputs = new[] { -4, 7 };
+            var expected = new int[1];
+            var compiled = new int[1];
+            var device = new int[1];
+            new ReferenceGenomeEvaluator<int>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<int>(functions, Int32ValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<int>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
+            Assert.Equal(expected, compiled);
+            Assert.Equal(expected, device);
+        }
+
+        {
+            var functions = StandardDoubleArrayFunctionSet.Instance;
+            var genome = DoubleArrayScenario(functions);
+            var inputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+            var expected = new double[1][];
+            var compiled = new double[1][];
+            var device = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
+            Assert.Equal(expected[0], compiled[0]);
+            Assert.Equal(expected[0], device[0]);
+        }
+
+        {
+            var functions = StandardInt32ArrayFunctionSet.Instance;
+            var genome = IntArrayScenario(functions);
+            var inputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+            var expected = new int[1][];
+            var compiled = new int[1][];
+            var device = new int[1][];
+            new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+            evaluator.Evaluate(genome, inputs, device);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
+            Assert.Equal(expected[0], compiled[0]);
+            Assert.Equal(expected[0], device[0]);
         }
     }
 
@@ -213,18 +300,94 @@ public sealed class IlgpuDeviceMatrixTests
             [2, 3, 4, 5],
             DoubleValueSemantics.Instance,
             functions);
-        var inputs = new[] { -0.0, 0.0 };
-        var expected = new double[4];
-        var actual = new double[4];
-        new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+        var signedZeroPairs = new[]
+        {
+            (0.0, 0.0),
+            (0.0, -0.0),
+            (-0.0, 0.0),
+            (-0.0, -0.0),
+        };
         using var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null);
-        evaluator.Evaluate(genome, inputs, actual);
+        foreach (var (a, b) in signedZeroPairs)
+        {
+            var inputs = new[] { a, b };
+            var expected = new double[4];
+            var compiled = new double[4];
+            var actual = new double[4];
+            new ReferenceGenomeEvaluator<double>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double>(functions, DoubleValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            evaluator.Evaluate(genome, inputs, actual);
+            IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
 
+            var pairTag = $"{label} ({Sign(a)},{Sign(b)})";
+            for (var i = 0; i < 4; i++)
+            {
+                var e = BitConverter.DoubleToInt64Bits(expected[i]);
+                Assert.True(
+                    e == BitConverter.DoubleToInt64Bits(compiled[i]),
+                    $"{pairTag} compiled saída {i}: esperado bits {e:x}, atual {BitConverter.DoubleToInt64Bits(compiled[i]):x}");
+                Assert.True(
+                    e == BitConverter.DoubleToInt64Bits(actual[i]),
+                    $"{pairTag} dispositivo saída {i}: esperado bits {e:x}, atual {BitConverter.DoubleToInt64Bits(actual[i]):x}");
+            }
+        }
+    }
+
+    private static string Sign(double value) => double.IsNegative(value) ? "-0" : "+0";
+
+    /// <summary>
+    /// Zero com sinal em Min/Max para double[] (elemento a elemento), nos três caminhos: referência, compiled CPU
+    /// distinto e dispositivo. Comparação bit a bit, sem tolerância.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Signed_zero_min_max_arrays_match_bit_for_bit_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var minId = IlgpuTestHelpers.FindFunctionId(functions, "min");
+        var maxId = IlgpuTestHelpers.FindFunctionId(functions, "max");
+        var shape = new GenomeShape(InputCount: 2, NodeCount: 4, OutputCount: 4, MaxArity: 2, LevelsBack: 4);
+        var genome = Genome<double[]>.FromGenes(
+            shape,
+            [minId, maxId, minId, maxId],
+            [0, 1, 1, 0, 1, 0, 0, 1],
+            [Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>(), Array.Empty<double>()],
+            [2, 3, 4, 5],
+            DoubleArrayValueSemantics.Instance,
+            functions);
+        var signedZeroPairs = new[]
+        {
+            (0.0, 0.0),
+            (0.0, -0.0),
+            (-0.0, 0.0),
+            (-0.0, -0.0),
+        };
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        foreach (var (a, b) in signedZeroPairs)
+        {
+            var inputs = new[] { new[] { a, a }, new[] { b, b } };
+            var expected = new double[4][];
+            var compiled = new double[4][];
+            var actual = new double[4][];
+            new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+            new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+            evaluator.Evaluate(genome, inputs, actual);
+            AssertDeviceEvaluation(evaluator, genome, functions, selection);
+
+            var pairTag = $"{label} ({Sign(a)},{Sign(b)})";
         for (var i = 0; i < 4; i++)
         {
-            Assert.True(
-                BitConverter.DoubleToInt64Bits(expected[i]) == BitConverter.DoubleToInt64Bits(actual[i]),
-                $"{label} saída {i}: esperado bits {BitConverter.DoubleToInt64Bits(expected[i]):x}, atual {BitConverter.DoubleToInt64Bits(actual[i]):x}");
+            Assert.Equal(expected[i].Length, compiled[i].Length);
+            Assert.Equal(expected[i].Length, actual[i].Length);
+            for (var j = 0; j < expected[i].Length; j++)
+            {
+                var e = BitConverter.DoubleToInt64Bits(expected[i][j]);
+                Assert.True(e == BitConverter.DoubleToInt64Bits(compiled[i][j]), $"{pairTag} compiled saída {i}[{j}]");
+                Assert.True(e == BitConverter.DoubleToInt64Bits(actual[i][j]), $"{pairTag} dispositivo saída {i}[{j}]");
+            }
+        }
         }
     }
 
