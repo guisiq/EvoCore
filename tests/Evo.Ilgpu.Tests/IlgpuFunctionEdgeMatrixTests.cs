@@ -197,7 +197,11 @@ public sealed class IlgpuFunctionEdgeMatrixTests
         var divId = IlgpuTestHelpers.FindFunctionId(functions, "protecteddivide");
         var genome = SingleNodeGenomeWithInputs(functions, divId, 2, [0, 1], ConstantDouble, DoubleValueSemantics.Instance);
         const double Numerator = 3.0;
-        var denominators = new[] { Eps * 0.5, -Eps * 0.5, Eps, -Eps, Eps * 1.5, -Eps * 1.5 };
+        var denominators = new[]
+        {
+            Eps * 0.5, -Eps * 0.5, Eps, -Eps, Eps * 1.5, -Eps * 1.5,
+            Math.BitDecrement(Eps), Math.BitIncrement(Eps), Math.BitDecrement(-Eps), Math.BitIncrement(-Eps),
+        };
         foreach (var denom in denominators)
         {
             var inputs = new[] { Numerator, denom };

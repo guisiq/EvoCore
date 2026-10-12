@@ -26,6 +26,8 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         [new[] { double.PositiveInfinity, double.NegativeInfinity, 0.0 }, new[] { double.NegativeInfinity, double.PositiveInfinity, 0.0 }],
         [new[] { 0.0, -0.0, 2.5 }, new[] { -0.0, 0.0, -1.25 }],
         [new[] { 1e-300, 2.0, -3.5 }, new[] { 2.0, 1e-300, 0.5 }],
+        [new[] { 7.0 }, new[] { -2.5 }],
+        [new[] { 1.5, -2.0, 3.0, double.NaN, 0.0 }, new[] { -1.0, 4.0, double.PositiveInfinity, 2.0, -0.0 }],
     ];
 
     public static IEnumerable<object[]> IntArrayEdges() =>
@@ -35,6 +37,8 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         [new[] { int.MinValue, 0, int.MaxValue }, new[] { 0, int.MinValue, int.MaxValue }],
         [new[] { 0, 0, 0 }, new[] { 0, 0, 0 }],
         [new[] { 7, -4, 1 }, new[] { -3, 7, -1 }],
+        [new[] { 5 }, new[] { -8 }],
+        [new[] { 1, -2, 3, int.MinValue, 0 }, new[] { -1, 4, int.MaxValue, 2, -7 }],
     ];
 
     [Theory]
@@ -229,6 +233,8 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         {
             new[] { Eps * 0.5, -Eps * 0.5, Eps },
             new[] { -Eps, Eps * 1.5, -Eps * 1.5 },
+            new[] { Math.BitDecrement(Eps), Math.BitIncrement(Eps), Math.BitDecrement(-Eps) },
+            new[] { Math.BitIncrement(-Eps), Eps, -Eps },
         };
         foreach (var denom in denominators)
         {
@@ -278,6 +284,78 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_array_mismatched_condition_length_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Variação complementar (R9-3): aqui é a condição "c" que diverge (comprimento 2), enquanto os dois ramos
+        // "a"/"b" têm comprimento compatível (3) entre si — argumento diferente do caso a/b já coberto acima.
+        _ = label;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1.0, 1.0 }, new[] { 10.0, 20.0, 30.0 }, new[] { -10.0, -20.0, -30.0 } };
+        var output = new double[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Constant_array_length_differs_from_sibling_input_is_valid_as_direct_output_on_device(string label, IlgpuBackendSelection selection)
+    {
+        // Genoma de um nó Constant (arity 0, R9-3): o comprimento do parâmetro (5) difere do comprimento das
+        // entradas (3), mas como a saída é o próprio nó Constant (sem combiná-lo com a entrada), é uma saída
+        // válida, não uma incompatibilidade — diferente do caso de operando incompatível acima.
+        _ = label;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var constId = IlgpuTestHelpers.FindFunctionId(functions, "constant");
+        var parameter = new[] { 1.0, -2.0, double.NaN, double.PositiveInfinity, 0.0 };
+        var genome = SingleNodeArrayGenome(functions, constId, parameter, DoubleArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1.0, 2.0, 3.0 }, new[] { 4.0, 5.0, 6.0 } };
+        var expected = new double[1][];
+        var compiled = new double[1][];
+        var device = new double[1][];
+        new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+        new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        evaluator.Evaluate(genome, inputs, device);
+        // Comprimento divergente de arrays no mesmo genoma não é suportado pelo kernel ILGPU mesmo quando o nó
+        // Constant em si ignora a entrada (arity 0): cai no fallback compiled-default legítimo, sem contar como
+        // cobertura de dispositivo, mas a saída continua válida e igual à referência.
+        IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], compiled[0], "compiled");
+        IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], device[0], "device");
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Constant_int_array_length_differs_from_sibling_input_is_valid_as_direct_output_on_device(string label, IlgpuBackendSelection selection)
+    {
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var constId = IlgpuTestHelpers.FindFunctionId(functions, "constant");
+        var parameter = new[] { 1, -2, int.MinValue, int.MaxValue, 0 };
+        var genome = SingleNodeArrayGenome(functions, constId, parameter, Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1, 2, 3 }, new[] { 4, 5, 6 } };
+        var expected = new int[1][];
+        var compiled = new int[1][];
+        var device = new int[1][];
+        new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+        new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        evaluator.Evaluate(genome, inputs, device);
+        Assert.Equal(expected[0], compiled[0]);
+        Assert.Equal(expected[0], device[0]);
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     [Theory]
