@@ -111,12 +111,15 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var genome = SingleNodeArrayGenome(functions, addId, Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
         var inputs = new[] { Array.Empty<double>(), Array.Empty<double>() };
         var expected = new double[1][];
+        var compiled = new double[1][];
         var device = new double[1][];
         new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, expected);
+        new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         evaluator.Evaluate(genome, inputs, device);
 
         Assert.Empty(expected[0]);
+        Assert.Empty(compiled[0]);
         Assert.Empty(device[0]);
         Assert.False(evaluator.LastEvaluationUsedDevice);
         Assert.Equal("CPU fallback", evaluator.Backend);
@@ -136,12 +139,15 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var genome = SingleNodeArrayGenome(functions, addId, Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
         var inputs = new[] { Array.Empty<int>(), Array.Empty<int>() };
         var expected = new int[1][];
+        var compiled = new int[1][];
         var device = new int[1][];
         new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+        new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, compiled);
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         evaluator.Evaluate(genome, inputs, device);
 
         Assert.Empty(expected[0]);
+        Assert.Empty(compiled[0]);
         Assert.Empty(device[0]);
         Assert.False(evaluator.LastEvaluationUsedDevice);
         Assert.Equal("CPU fallback", evaluator.Backend);
@@ -161,6 +167,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1.0, 2.0 }, new[] { 1.0, 2.0, 3.0 } };
         var output = new double[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -295,6 +302,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1, 2 }, new[] { 1, 2, 3 } };
         var output = new int[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -315,6 +323,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1.0, 1.0, 1.0 }, new[] { 10.0, 20.0, 30.0 }, new[] { -10.0, -20.0 } };
         var output = new double[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -335,6 +344,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1, 1, 1 }, new[] { 10, 20, 30 }, new[] { -10, -20 } };
         var output = new int[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -356,6 +366,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1.0, 1.0 }, new[] { 10.0, 20.0, 30.0 }, new[] { -10.0, -20.0, -30.0 } };
         var output = new double[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -376,6 +387,50 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1, 1 }, new[] { 10, 20, 30 }, new[] { -10, -20, -30 } };
         var output = new int[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_array_mismatched_branch_a_length_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Variação discriminante (R15-1): aqui é apenas o ramo "a" (comprimento 2) que diverge da condição e do
+        // ramo "b" (comprimento 3 ambos), diferente dos casos já cobertos de "b" e de condição divergentes.
+        _ = label;
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<double>(), DoubleArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1.0, 1.0, 1.0 }, new[] { 10.0, 20.0 }, new[] { -10.0, -20.0, -30.0 } };
+        var output = new double[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_int_array_mismatched_branch_a_length_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Variação int[] (R15-1) do ramo "a" divergente acima, que só cobria double[].
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1, 1, 1 }, new[] { 10, 20 }, new[] { -10, -20, -30 } };
+        var output = new int[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -460,6 +515,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1.0, 2.0, 3.0 } };
         var output = new double[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<double[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<double[]>(functions, DoubleArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
@@ -489,6 +545,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         var inputs = new[] { new[] { 1, 2, 3 } };
         var output = new int[1][];
         Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        Assert.Throws<ArgumentException>(() => new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance).Evaluate(genome, inputs, output));
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
