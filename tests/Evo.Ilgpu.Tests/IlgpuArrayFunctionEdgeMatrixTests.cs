@@ -119,6 +119,34 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Empty(expected[0]);
         Assert.Empty(device[0]);
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.Contains("vazi", evaluator.LastFallbackReason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Empty_int_arrays_fall_back_to_cpu_without_counting_as_device_coverage(string label, IlgpuBackendSelection selection)
+    {
+        // Variação int[] (R13-2) do caso "vazio válido" acima, que só cobria double[].
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var genome = SingleNodeArrayGenome(functions, addId, Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { Array.Empty<int>(), Array.Empty<int>() };
+        var expected = new int[1][];
+        var device = new int[1][];
+        new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, expected);
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        evaluator.Evaluate(genome, inputs, device);
+
+        Assert.Empty(expected[0]);
+        Assert.Empty(device[0]);
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
         Assert.Contains("vazi", evaluator.LastFallbackReason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -136,6 +164,9 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     /// <summary>Genoma mínimo: um nó com a função <paramref name="functionId"/> sobre Input0/Input1 e uma saída.</summary>
@@ -267,6 +298,9 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     [Theory]
@@ -284,6 +318,29 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_int_array_mismatched_argument_lengths_fall_back_and_match_reference_failure_without_counting_as_device_coverage(string label, IlgpuBackendSelection selection)
+    {
+        // Variação int[] (R13-2) do ramo "b" divergente acima, que só cobria double[].
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1, 1, 1 }, new[] { 10, 20, 30 }, new[] { -10, -20 } };
+        var output = new int[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     [Theory]
@@ -302,6 +359,29 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Select_int_array_mismatched_condition_length_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Variação int[] (R13-2) da condição divergente acima, que só cobria double[].
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var selectId = IlgpuTestHelpers.FindFunctionId(functions, "select");
+        var genome = SingleNodeArrayGenomeWithInputs(functions, selectId, 3, [0, 1, 2], Array.Empty<int>(), Int32ArrayValueSemantics.Instance);
+        var inputs = new[] { new[] { 1, 1 }, new[] { 10, 20, 30 }, new[] { -10, -20, -30 } };
+        var output = new int[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     [Theory]
@@ -383,6 +463,38 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         using var evaluator = new IlgpuGenomeEvaluator<double[]>(functions, null, selection, null, null, null);
         Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+    }
+
+    [Theory]
+    [MemberData(nameof(IlgpuDeviceMatrixTests.Devices), MemberType = typeof(IlgpuDeviceMatrixTests))]
+    public void Constant_int_array_length_mismatch_with_sibling_input_falls_back_and_matches_reference_failure(string label, IlgpuBackendSelection selection)
+    {
+        // Variação int[] (R13-2) do Constant usado como operando incompatível acima, que só cobria double[].
+        _ = label;
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var constId = IlgpuTestHelpers.FindFunctionId(functions, "constant");
+        var addId = IlgpuTestHelpers.FindFunctionId(functions, "add");
+        var shape = new GenomeShape(InputCount: 1, NodeCount: 2, OutputCount: 1, MaxArity: 2, LevelsBack: 3);
+        var genome = Genome<int[]>.FromGenes(
+            shape,
+            [constId, addId],
+            [0, 0, 0, 1],
+            [new[] { 1, 2 }, Array.Empty<int>()],
+            [2],
+            Int32ArrayValueSemantics.Instance,
+            functions);
+        var inputs = new[] { new[] { 1, 2, 3 } };
+        var output = new int[1][];
+        Assert.Throws<ArgumentException>(() => new ReferenceGenomeEvaluator<int[]>(functions).Evaluate(genome, inputs, output));
+        using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
+        Assert.Throws<ArgumentException>(() => evaluator.Evaluate(genome, inputs, output));
+        Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
     }
 
     private static void AssertDeviceKernel<T>(IlgpuGenomeEvaluator<T> evaluator, Genome<T> genome, IFunctionSet<T> functions, IlgpuBackendSelection selection, string tag)
