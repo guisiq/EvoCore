@@ -497,20 +497,38 @@ public sealed class IlgpuDeviceMatrixTests
         var functions = StandardDoubleFunctionSet.Instance;
         var genome = DoubleScenario(functions);
 
+        // Cancelamento antes da avaliação: nenhuma chamada ao avaliador pode ocorrer e os recursos são descartados.
+        ILGPU.Runtime.Accelerator? beforeAccelerator;
+        Context? beforeContext;
         using (var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null))
         {
             using var beforeCts = new CancellationTokenSource();
             beforeCts.Cancel();
             var fitness = new CancellingFitness(beforeCts.Token, cancelOnCall: 0);
+            beforeAccelerator = evaluator.InternalAccelerator;
+            beforeContext = evaluator.InternalContext;
             Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, beforeCts.Token));
+            Assert.Equal(0, fitness.Calls);
         }
 
+        Assert.True(beforeAccelerator is null || beforeAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento antes");
+        Assert.True(beforeContext is null || beforeContext.IsDisposed, $"{label}: context não descartado após cancelamento antes");
+
+        // Cancelamento durante a avaliação: exatamente uma chamada real ao avaliador ocorre antes do cancelamento.
+        ILGPU.Runtime.Accelerator? duringAccelerator;
+        Context? duringContext;
         using (var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null))
         {
             using var duringCts = new CancellationTokenSource();
             var fitness = new CancellingFitness(duringCts.Token, cancelOnCall: 1, cancelBeforeCall: duringCts.Cancel);
+            duringAccelerator = evaluator.InternalAccelerator;
+            duringContext = evaluator.InternalContext;
             Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, duringCts.Token));
+            Assert.Equal(1, fitness.Calls);
         }
+
+        Assert.True(duringAccelerator is null || duringAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento durante");
+        Assert.True(duringContext is null || duringContext.IsDisposed, $"{label}: context não descartado após cancelamento durante");
 
         // Um worker novo com a mesma seleção precisa continuar funcional depois do cancelamento: os recursos
         // do worker cancelado foram liberados (Dispose) sem deixar o acelerador/contexto compartilhado inválido.
@@ -536,6 +554,8 @@ public sealed class IlgpuDeviceMatrixTests
             _cancelOnCall = cancelOnCall;
             _cancelBeforeCall = cancelBeforeCall;
         }
+
+        public int Calls => _calls;
 
         public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
         {
