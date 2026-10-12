@@ -29,8 +29,8 @@ public sealed class IlgpuBackendInitializationException : Exception
     /// <summary>Underlying cause reported by the failing worker or by the worker that first observed it.</summary>
     public string Cause { get; }
 
-    internal IlgpuBackendInitializationException(long workerId, string backend, string cause)
-        : base($"worker={workerId}: falha ao inicializar {backend} depois da seleção compartilhada: {cause}")
+    internal IlgpuBackendInitializationException(long workerId, string backend, string cause, Exception? innerException = null)
+        : base($"worker={workerId}: falha ao inicializar {backend} depois da seleção compartilhada: {cause}", innerException)
     {
         WorkerId = workerId;
         Backend = backend;
@@ -168,7 +168,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
                 ReleaseDevice();
                 var cause = $"falha ao inicializar {_selection.BackendName} em '{_selection.DeviceName}': {ex.GetType().Name}: {ex.Message}";
                 IlgpuBackendSelector.ReportInitializationFailure(_selection, cause);
-                throw;
+                // A causa original é preservada em InnerException; o worker e o backend tentado são expostos
+                // no erro entregue ao chamador, sem sucesso por fallback (06-v2-ilgpu-backend.md decisão 2).
+                throw new IlgpuBackendInitializationException(WorkerId, _selection.BackendName, cause, ex);
             }
         }
 
