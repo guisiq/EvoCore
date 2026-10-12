@@ -473,6 +473,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], compiled[0], "compiled");
         IlgpuTestHelpers.AssertDoubleArrayClose(expected[0], device[0], "device");
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
         Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
@@ -498,6 +499,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal(expected[0], compiled[0]);
         Assert.Equal(expected[0], device[0]);
         Assert.False(evaluator.LastEvaluationUsedDevice);
+        Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
         Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");

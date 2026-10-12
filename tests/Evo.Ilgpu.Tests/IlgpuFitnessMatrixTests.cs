@@ -93,10 +93,12 @@ public sealed class IlgpuFitnessMatrixTests
             Assert.True(reference.IsValid, $"{tag}: referência IsValid");
 
             var compiled = new ScoredFitness<int>(inputs, Score).Evaluate(genome, new CompiledGenomeEvaluator<int>(functions, Int32ValueSemantics.Instance), CancellationToken.None);
+            Assert.True(reference.IsValid == compiled.IsValid, $"{tag}: compiled IsValid");
             Assert.Equal(reference.Value, compiled.Value);
 
             using var evaluator = new IlgpuGenomeEvaluator<int>(functions, null, selection, null, null, null);
             var device = new ScoredFitness<int>(inputs, Score).Evaluate(genome, evaluator, CancellationToken.None);
+            Assert.True(reference.IsValid == device.IsValid, $"{tag}: device IsValid");
             Assert.Equal(reference.Value, device.Value);
 
             IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
@@ -177,10 +179,12 @@ public sealed class IlgpuFitnessMatrixTests
         Assert.True(reference.IsValid, $"{tag}: referência IsValid");
 
         var compiled = new ScoredFitness<int[]>(inputs, Score).Evaluate(genome, new CompiledGenomeEvaluator<int[]>(functions, Int32ArrayValueSemantics.Instance), CancellationToken.None);
+        Assert.True(reference.IsValid == compiled.IsValid, $"{tag}: compiled IsValid");
         Assert.Equal(reference.Value, compiled.Value);
 
         using var evaluator = new IlgpuGenomeEvaluator<int[]>(functions, null, selection, null, null, null);
         var device = new ScoredFitness<int[]>(inputs, Score).Evaluate(genome, evaluator, CancellationToken.None);
+        Assert.True(reference.IsValid == device.IsValid, $"{tag}: device IsValid");
         Assert.Equal(reference.Value, device.Value);
 
         IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
