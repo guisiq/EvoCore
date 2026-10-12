@@ -126,8 +126,16 @@ public sealed class IlgpuDagMatrixTests
         AssertExpectedAddresses(device.LastDeviceExecutionCounts, active, inactive, tag);
         AssertExpectedNodeCounts(refCounters.NodeExecutions, active, inactive, $"{tag} reference");
         AssertExpectedNodeCounts(compiledCounters.ScalarExecutions, active, inactive, $"{tag} compiled");
-        return new ScalarSnapshot<T>((T[])expected.Clone(), (T[])compiledActual.Clone(), (T[])deviceActual.Clone());
+        // R13-1: retém os buffers ORIGINAIS (não clones) para que uma mutação posterior de qualquer
+        // um deles seja detectável comparando contra um snapshot independente tirado pelo chamador.
+        return new ScalarSnapshot<T>(expected, compiledActual, deviceActual);
     }
+
+    private static ScalarSnapshot<T> CloneSnapshot<T>(ScalarSnapshot<T> snapshot) =>
+        new((T[])snapshot.Reference.Clone(), (T[])snapshot.Compiled.Clone(), (T[])snapshot.Device.Clone());
+
+    private static ArraySnapshot<T> CloneArraySnapshot<T>(ArraySnapshot<T> snapshot) where T : notnull =>
+        new(CloneJagged(snapshot.Reference), CloneJagged(snapshot.Compiled), CloneJagged(snapshot.Device));
 
     /// <summary>
     /// R9-2: confere que um snapshot retido de uma chamada anterior (reference/compiled/device)
@@ -230,7 +238,8 @@ public sealed class IlgpuDagMatrixTests
         AssertExpectedAddresses(device.LastDeviceExecutionCounts, active, inactive, tag);
         AssertExpectedNodeCounts(refCounters.NodeExecutions, active, inactive, $"{tag} reference");
         AssertExpectedNodeCounts(compiledCounters.ScalarExecutions, active, inactive, $"{tag} compiled");
-        return new ArraySnapshot<T>(CloneJagged(expected), CloneJagged(compiledActual), CloneJagged(deviceActual));
+        // R13-1: retém os buffers ORIGINAIS (não clones); o chamador tira um snapshot independente.
+        return new ArraySnapshot<T>(expected, compiledActual, deviceActual);
     }
 
     private static void AssertDouble(string label, IlgpuBackendSelection selection)
@@ -258,26 +267,35 @@ public sealed class IlgpuDagMatrixTests
         var inputs1 = new[] { 3.0, -0.5 };
         var inputs1Copy = (double[])inputs1.Clone();
         var out1 = EvaluateAndAssert($"{label} double A lote1", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, IlgpuTestHelpers.AssertDoubleArrayClose, refCounters, compiledCounters);
-        Assert.Equal(inputs1Copy, inputs1);
+        var out1Snapshot = CloneSnapshot(out1);
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy, inputs1, $"{label} double A lote1 inputs");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double A lote1 ParameterGenes");
 
         var inputs2 = new[] { 1.25, 9.0 };
+        var inputs2Copy = (double[])inputs2.Clone();
         var out2 = EvaluateAndAssert($"{label} double A lote2", genomeA, inputs2, functions, reference, compiled, device, selection, ActiveA, InactiveA, IlgpuTestHelpers.AssertDoubleArrayClose, refCounters, compiledCounters);
-        Assert.Equal(inputs1Copy, inputs1);
+        var out2Snapshot = CloneSnapshot(out2);
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy, inputs1, $"{label} double A lote2 inputs1 ainda íntegro");
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs2Copy, inputs2, $"{label} double A lote2 inputs2");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double A lote2 ParameterGenes");
-        AssertSnapshotUnchanged($"{label} double A lote1 pós-lote2", out1, out1);
+        AssertSnapshotUnchanged($"{label} double A lote1 pós-lote2", out1, out1Snapshot);
 
         var inputsB = new[] { -2.0, 4.0 };
+        var inputsBCopy = (double[])inputsB.Clone();
         var outB = EvaluateAndAssert($"{label} double B", genomeB, inputsB, functions, reference, compiled, device, selection, ActiveB, InactiveB, IlgpuTestHelpers.AssertDoubleArrayClose, refCounters, compiledCounters);
+        var outBSnapshot = CloneSnapshot(outB);
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(inputsBCopy, inputsB, $"{label} double B inputs");
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double A ParameterGenes pós-B");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} double B ParameterGenes");
-        AssertSnapshotUnchanged($"{label} double A lote1 pós-B", out1, out1);
-        AssertSnapshotUnchanged($"{label} double A lote2 pós-B", out2, out2);
+        AssertSnapshotUnchanged($"{label} double A lote1 pós-B", out1, out1Snapshot);
+        AssertSnapshotUnchanged($"{label} double A lote2 pós-B", out2, out2Snapshot);
 
         var out1Again = EvaluateAndAssert($"{label} double A retorno", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, IlgpuTestHelpers.AssertDoubleArrayClose, refCounters, compiledCounters);
-        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1.Reference, out1Again.Reference, $"{label} double A retorno deve repetir saída reference do lote1");
-        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1.Compiled, out1Again.Compiled, $"{label} double A retorno deve repetir saída compiled do lote1");
-        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1.Device, out1Again.Device, $"{label} double A retorno deve repetir saída device do lote1");
-        Assert.Equal(inputs1Copy, inputs1);
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Reference, out1Again.Reference, $"{label} double A retorno deve repetir saída reference do lote1");
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Compiled, out1Again.Compiled, $"{label} double A retorno deve repetir saída compiled do lote1");
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(out1Snapshot.Device, out1Again.Device, $"{label} double A retorno deve repetir saída device do lote1");
+        AssertSnapshotUnchanged($"{label} double B pós-retorno a A", outB, outBSnapshot);
+        IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy, inputs1, $"{label} double A retorno inputs");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double A retorno ParameterGenes");
         IlgpuTestHelpers.AssertDoubleArrayBitExact(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} double B ParameterGenes pós-retorno");
     }
@@ -307,25 +325,34 @@ public sealed class IlgpuDagMatrixTests
         var inputs1 = new[] { -4, 7 };
         var inputs1Copy = (int[])inputs1.Clone();
         var out1 = EvaluateAndAssert($"{label} int A lote1", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, assertEqual, refCounters, compiledCounters);
+        var out1Snapshot = CloneSnapshot(out1);
         Assert.Equal(inputs1Copy, inputs1);
         Assert.Equal(paramsACopy, genomeA.ParameterGenes.ToArray());
 
         var inputs2 = new[] { int.MaxValue, 2 };
+        var inputs2Copy = (int[])inputs2.Clone();
         var out2 = EvaluateAndAssert($"{label} int A lote2", genomeA, inputs2, functions, reference, compiled, device, selection, ActiveA, InactiveA, assertEqual, refCounters, compiledCounters);
+        var out2Snapshot = CloneSnapshot(out2);
         Assert.Equal(inputs1Copy, inputs1);
+        Assert.Equal(inputs2Copy, inputs2);
         Assert.Equal(paramsACopy, genomeA.ParameterGenes.ToArray());
-        AssertSnapshotUnchanged($"{label} int A lote1 pós-lote2", out1, out1);
+        AssertSnapshotUnchanged($"{label} int A lote1 pós-lote2", out1, out1Snapshot);
 
         var inputsB = new[] { -9, 11 };
+        var inputsBCopy = (int[])inputsB.Clone();
         var outB = EvaluateAndAssert($"{label} int B", genomeB, inputsB, functions, reference, compiled, device, selection, ActiveB, InactiveB, assertEqual, refCounters, compiledCounters);
+        var outBSnapshot = CloneSnapshot(outB);
+        Assert.Equal(inputsBCopy, inputsB);
+        Assert.Equal(paramsACopy, genomeA.ParameterGenes.ToArray());
         Assert.Equal(paramsBCopy, genomeB.ParameterGenes.ToArray());
-        AssertSnapshotUnchanged($"{label} int A lote1 pós-B", out1, out1);
-        AssertSnapshotUnchanged($"{label} int A lote2 pós-B", out2, out2);
+        AssertSnapshotUnchanged($"{label} int A lote1 pós-B", out1, out1Snapshot);
+        AssertSnapshotUnchanged($"{label} int A lote2 pós-B", out2, out2Snapshot);
 
         var out1Again = EvaluateAndAssert($"{label} int A retorno", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, assertEqual, refCounters, compiledCounters);
-        Assert.Equal(out1.Reference, out1Again.Reference);
-        Assert.Equal(out1.Compiled, out1Again.Compiled);
-        Assert.Equal(out1.Device, out1Again.Device);
+        Assert.Equal(out1Snapshot.Reference, out1Again.Reference);
+        Assert.Equal(out1Snapshot.Compiled, out1Again.Compiled);
+        Assert.Equal(out1Snapshot.Device, out1Again.Device);
+        AssertSnapshotUnchanged($"{label} int B pós-retorno a A", outB, outBSnapshot);
         Assert.Equal(inputs1Copy, inputs1);
         Assert.Equal(paramsACopy, genomeA.ParameterGenes.ToArray());
         Assert.Equal(paramsBCopy, genomeB.ParameterGenes.ToArray());
@@ -357,29 +384,38 @@ public sealed class IlgpuDagMatrixTests
         var inputs1 = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
         var inputs1Copy = inputs1.Select(a => (double[])a.Clone()).ToArray();
         var out1 = EvaluateArrayAndAssert($"{label} double[] A lote1", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
-        for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
+        var out1Snapshot = CloneArraySnapshot(out1);
+        for (var i = 0; i < inputs1.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy[i], inputs1[i], $"{label} double[] A lote1 inputs[{i}]");
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double[] A lote1 ParameterGenes");
 
         var inputs2 = new[] { new[] { -5.0, 0.5 }, new[] { 2.0, -2.0 } };
+        var inputs2Copy = inputs2.Select(a => (double[])a.Clone()).ToArray();
         var out2 = EvaluateArrayAndAssert($"{label} double[] A lote2", genomeA, inputs2, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
-        for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
+        var out2Snapshot = CloneArraySnapshot(out2);
+        for (var i = 0; i < inputs1.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy[i], inputs1[i], $"{label} double[] A lote2 inputs1[{i}] ainda íntegro");
+        for (var i = 0; i < inputs2.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs2Copy[i], inputs2[i], $"{label} double[] A lote2 inputs2[{i}]");
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double[] A lote2 ParameterGenes");
-        AssertArraySnapshotUnchanged($"{label} double[] A lote1 pós-lote2", out1, out1);
+        AssertArraySnapshotUnchanged($"{label} double[] A lote1 pós-lote2", out1, out1Snapshot);
 
         var inputsB = new[] { new[] { 7.0, -3.0 }, new[] { 0.5, 6.0 } };
+        var inputsBCopy = inputsB.Select(a => (double[])a.Clone()).ToArray();
         var outB = EvaluateArrayAndAssert($"{label} double[] B", genomeB, inputsB, functions, reference, compiled, device, selection, ActiveB, InactiveB, refCounters, compiledCounters);
+        var outBSnapshot = CloneArraySnapshot(outB);
+        for (var i = 0; i < inputsB.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputsBCopy[i], inputsB[i], $"{label} double[] B inputs[{i}]");
         Assert.Equal(constantParamCopy, constantParam);
+        AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double[] A ParameterGenes pós-B");
         AssertJaggedEqual(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} double[] B ParameterGenes");
-        AssertArraySnapshotUnchanged($"{label} double[] A lote1 pós-B", out1, out1);
-        AssertArraySnapshotUnchanged($"{label} double[] A lote2 pós-B", out2, out2);
+        AssertArraySnapshotUnchanged($"{label} double[] A lote1 pós-B", out1, out1Snapshot);
+        AssertArraySnapshotUnchanged($"{label} double[] A lote2 pós-B", out2, out2Snapshot);
 
         var out1Again = EvaluateArrayAndAssert($"{label} double[] A retorno", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
-        AssertJaggedEqual(out1.Reference, out1Again.Reference, $"{label} double[] A retorno reference");
-        AssertJaggedEqual(out1.Compiled, out1Again.Compiled, $"{label} double[] A retorno compiled");
-        AssertJaggedEqual(out1.Device, out1Again.Device, $"{label} double[] A retorno device");
-        for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
+        AssertJaggedEqual(out1Snapshot.Reference, out1Again.Reference, $"{label} double[] A retorno reference");
+        AssertJaggedEqual(out1Snapshot.Compiled, out1Again.Compiled, $"{label} double[] A retorno compiled");
+        AssertJaggedEqual(out1Snapshot.Device, out1Again.Device, $"{label} double[] A retorno device");
+        AssertArraySnapshotUnchanged($"{label} double[] B pós-retorno a A", outB, outBSnapshot);
+        for (var i = 0; i < inputs1.Length; i++) IlgpuTestHelpers.AssertDoubleArrayBitExact(inputs1Copy[i], inputs1[i], $"{label} double[] A retorno inputs[{i}]");
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} double[] A retorno ParameterGenes");
         AssertJaggedEqual(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} double[] B ParameterGenes pós-retorno");
@@ -411,31 +447,64 @@ public sealed class IlgpuDagMatrixTests
         var inputs1 = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
         var inputs1Copy = inputs1.Select(a => (int[])a.Clone()).ToArray();
         var out1 = EvaluateArrayAndAssert($"{label} int[] A lote1", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
+        var out1Snapshot = CloneArraySnapshot(out1);
         for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} int[] A lote1 ParameterGenes");
 
         var inputs2 = new[] { new[] { -5, 10 }, new[] { 2, -2 } };
+        var inputs2Copy = inputs2.Select(a => (int[])a.Clone()).ToArray();
         var out2 = EvaluateArrayAndAssert($"{label} int[] A lote2", genomeA, inputs2, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
+        var out2Snapshot = CloneArraySnapshot(out2);
         for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
+        for (var i = 0; i < inputs2.Length; i++) Assert.Equal(inputs2Copy[i], inputs2[i]);
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} int[] A lote2 ParameterGenes");
-        AssertArraySnapshotUnchanged($"{label} int[] A lote1 pós-lote2", out1, out1);
+        AssertArraySnapshotUnchanged($"{label} int[] A lote1 pós-lote2", out1, out1Snapshot);
 
         var inputsB = new[] { new[] { 13, -6 }, new[] { 1, 8 } };
+        var inputsBCopy = inputsB.Select(a => (int[])a.Clone()).ToArray();
         var outB = EvaluateArrayAndAssert($"{label} int[] B", genomeB, inputsB, functions, reference, compiled, device, selection, ActiveB, InactiveB, refCounters, compiledCounters);
+        var outBSnapshot = CloneArraySnapshot(outB);
+        for (var i = 0; i < inputsB.Length; i++) Assert.Equal(inputsBCopy[i], inputsB[i]);
         Assert.Equal(constantParamCopy, constantParam);
+        AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} int[] A ParameterGenes pós-B");
         AssertJaggedEqual(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} int[] B ParameterGenes");
-        AssertArraySnapshotUnchanged($"{label} int[] A lote1 pós-B", out1, out1);
-        AssertArraySnapshotUnchanged($"{label} int[] A lote2 pós-B", out2, out2);
+        AssertArraySnapshotUnchanged($"{label} int[] A lote1 pós-B", out1, out1Snapshot);
+        AssertArraySnapshotUnchanged($"{label} int[] A lote2 pós-B", out2, out2Snapshot);
 
         var out1Again = EvaluateArrayAndAssert($"{label} int[] A retorno", genomeA, inputs1, functions, reference, compiled, device, selection, ActiveA, InactiveA, refCounters, compiledCounters);
-        AssertJaggedEqual(out1.Reference, out1Again.Reference, $"{label} int[] A retorno reference");
-        AssertJaggedEqual(out1.Compiled, out1Again.Compiled, $"{label} int[] A retorno compiled");
-        AssertJaggedEqual(out1.Device, out1Again.Device, $"{label} int[] A retorno device");
+        AssertJaggedEqual(out1Snapshot.Reference, out1Again.Reference, $"{label} int[] A retorno reference");
+        AssertJaggedEqual(out1Snapshot.Compiled, out1Again.Compiled, $"{label} int[] A retorno compiled");
+        AssertJaggedEqual(out1Snapshot.Device, out1Again.Device, $"{label} int[] A retorno device");
+        AssertArraySnapshotUnchanged($"{label} int[] B pós-retorno a A", outB, outBSnapshot);
         for (var i = 0; i < inputs1.Length; i++) Assert.Equal(inputs1Copy[i], inputs1[i]);
         Assert.Equal(constantParamCopy, constantParam);
         AssertJaggedEqual(paramsACopy, genomeA.ParameterGenes.ToArray(), $"{label} int[] A retorno ParameterGenes");
         AssertJaggedEqual(paramsBCopy, genomeB.ParameterGenes.ToArray(), $"{label} int[] B ParameterGenes pós-retorno");
+    }
+
+    /// <summary>
+    /// R13-1 controle negativo: corrompe deliberadamente um buffer retido após o snapshot ter sido
+    /// tirado e prova que AssertSnapshotUnchanged/AssertArraySnapshotUnchanged detectam a divergência
+    /// em vez de aprovar comparações tautológicas. Não altera produto nem semântica.
+    /// </summary>
+    [Fact]
+    public void Snapshot_integrity_check_detects_deliberate_mutation()
+    {
+        var scalar = new ScalarSnapshot<double>([1.0, -0.0], [2.0], [3.0]);
+        var scalarSnapshot = CloneSnapshot(scalar);
+        scalar.Reference[0] = Math.BitIncrement(scalar.Reference[0]);
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertSnapshotUnchanged("controle negativo scalar", scalar, scalarSnapshot));
+
+        var scalarInt = new ScalarSnapshot<int>([1, 2], [3], [4]);
+        var scalarIntSnapshot = CloneSnapshot(scalarInt);
+        scalarInt.Compiled[0] = 999;
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertSnapshotUnchanged("controle negativo scalar int", scalarInt, scalarIntSnapshot));
+
+        var array = new ArraySnapshot<double>([[1.0, 2.0]], [[3.0]], [[4.0]]);
+        var arraySnapshot = CloneArraySnapshot(array);
+        array.Device[0][0] = Math.BitIncrement(array.Device[0][0]);
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertArraySnapshotUnchanged("controle negativo array", array, arraySnapshot));
     }
 }
