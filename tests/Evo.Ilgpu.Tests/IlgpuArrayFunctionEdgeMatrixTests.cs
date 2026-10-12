@@ -174,6 +174,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     /// <summary>Genoma mínimo: um nó com a função <paramref name="functionId"/> sobre Input0/Input1 e uma saída.</summary>
@@ -309,6 +310,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -330,6 +332,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -351,6 +354,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -373,6 +377,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -394,6 +399,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -416,6 +422,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -437,6 +444,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -467,6 +475,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.False(evaluator.LastEvaluationUsedDevice);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -491,6 +500,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.False(evaluator.LastEvaluationUsedDevice);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -522,6 +532,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     [Theory]
@@ -552,6 +563,7 @@ public sealed class IlgpuArrayFunctionEdgeMatrixTests
         Assert.Equal("CPU fallback", evaluator.Backend);
         Assert.Equal("nenhum", evaluator.DeviceName);
         Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.False(string.IsNullOrWhiteSpace(evaluator.LastFallbackReason), "causa de fallback ausente");
     }
 
     private static void AssertDeviceKernel<T>(IlgpuGenomeEvaluator<T> evaluator, Genome<T> genome, IFunctionSet<T> functions, IlgpuBackendSelection selection, string tag)
