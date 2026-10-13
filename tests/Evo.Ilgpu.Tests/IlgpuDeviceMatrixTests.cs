@@ -112,6 +112,117 @@ public sealed class IlgpuDeviceMatrixTests
     private static IlgpuBackendSelection CpuSelection() =>
         new(IlgpuBackendKind.IlgpuCpu, 0, "CPU ILGPU", null, 8, 8, 1, 8, 4);
 
+    /// <summary>
+    /// Falha controlada (lançamento ou sincronização) depois da seleção do dispositivo: a exceção original é
+    /// preservada, o backend/dispositivo continuam sendo os selecionados (sem fallback de sucesso), os buffers
+    /// são descartados e Accelerator/Context são liberados pelo Dispose do avaliador.
+    /// </summary>
+    private static void AssertPostSelectionFailure<T>(
+        IlgpuBackendSelection selection,
+        IFunctionSet<T> functions,
+        bool launchFailure,
+        string label,
+        Action<IlgpuGenomeEvaluator<T>> evaluate)
+    {
+        MemoryBuffer[]? observedBuffers = null;
+        var forced = new InvalidOperationException($"falha-{(launchFailure ? "lancamento" : "sincronizacao")}-{label}");
+        var evaluator = launchFailure
+            ? new IlgpuGenomeEvaluator<T>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: _ => throw forced,
+                synchronizeInvoker: null,
+                bufferObserver: buffers => observedBuffers = buffers.ToArray())
+            : new IlgpuGenomeEvaluator<T>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: null,
+                synchronizeInvoker: _ => throw forced,
+                bufferObserver: buffers => observedBuffers = buffers.ToArray());
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => evaluate(evaluator));
+            Assert.Same(forced, error);
+            Assert.NotNull(observedBuffers);
+            Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
+            Assert.NotEqual("CPU fallback", evaluator.Backend);
+
+            var accelerator = evaluator.InternalAccelerator;
+            var context = evaluator.InternalContext;
+            Assert.NotNull(accelerator);
+            Assert.NotNull(context);
+            Assert.False(accelerator!.IsDisposed);
+            Assert.False(context!.IsDisposed);
+
+            evaluator.Dispose();
+            Assert.True(accelerator.IsDisposed);
+            Assert.True(context.IsDisposed);
+        }
+        finally
+        {
+            evaluator.Dispose();
+        }
+    }
+
+    private static GenomeShape AddShape() =>
+        new(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_double(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = Genome<double>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, [1.0, 2.0], new double[1]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, [1.0, 2.0], new double[1]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_int(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        var genome = Genome<int>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0], [2], Int32ValueSemantics.Instance, functions);
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, [1, 2], new int[1]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, [1, 2], new int[1]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_double_array(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var genome = Genome<double[]>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<double>()], [2], DoubleArrayValueSemantics.Instance, functions);
+        double[][] inputs = [[1.0, 2.0], [3.0, 4.0]];
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, inputs, new double[1][]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, inputs, new double[1][]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_int_array(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var genome = Genome<int[]>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<int>()], [2], Int32ArrayValueSemantics.Instance, functions);
+        int[][] inputs = [[1, 2], [3, 4]];
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, inputs, new int[1][]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, inputs, new int[1][]));
+    }
+
     private static Genome<double> DoubleScenario(IFunctionSet<double> functions)
     {
         var shape = new GenomeShape(InputCount: 2, NodeCount: 3, OutputCount: 2, MaxArity: 2, LevelsBack: 3);
