@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
@@ -599,6 +600,180 @@ public sealed class IlgpuDeviceMatrixTests
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Prova 1/2/N para os quatro tipos oficiais no dispositivo: cada caso é avaliado uma vez por um avaliador
+    /// privado do worker. double/double[] são comparados bit a bit entre contagens de workers; int/int[] são exatos;
+    /// a tolerância normativa só é usada contra a referência.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Worker_counts_1_2_n_four_types_identical_across_worker_counts_on_device(string label, IlgpuBackendSelection selection)
+    {
+        Assert.False(string.IsNullOrEmpty(label));
+        var doubleFns = StandardDoubleFunctionSet.Instance;
+        var intFns = StandardInt32FunctionSet.Instance;
+        var doubleArrFns = StandardDoubleArrayFunctionSet.Instance;
+        var intArrFns = StandardInt32ArrayFunctionSet.Instance;
+        var doubleGenome = DoubleScenario(doubleFns);
+        var intGenome = IntScenario(intFns);
+        var doubleArrGenome = DoubleArrayScenario(doubleArrFns);
+        var intArrGenome = IntArrayScenario(intArrFns);
+
+        var doubleInputs = new[] { new[] { 1.25, -3.5 }, new[] { -0.0, 0.0 }, new[] { 7.5, 2.0 }, new[] { -9.0, -1.5 }, new[] { 0.001, 1000.0 }, new[] { -4.75, 6.25 } };
+        var intInputs = new[] { new[] { -4, 7 }, new[] { 5, 9 }, new[] { 0, 0 }, new[] { -8, 3 }, new[] { 12, -6 }, new[] { 1, 1 } };
+        var doubleArrInputs = new[] { new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } }, new[] { new[] { -0.5, 0.5 }, new[] { 2.0, -2.0 } }, new[] { new[] { 9.0, 1.0 }, new[] { 1.0, 9.0 } }, new[] { new[] { 0.25, 0.75 }, new[] { 0.5, 0.5 } }, new[] { new[] { -3.0, 3.0 }, new[] { 6.0, -6.0 } }, new[] { new[] { 4.0, 8.0 }, new[] { 16.0, 32.0 } } };
+        var intArrInputs = new[] { new[] { new[] { 1, 2 }, new[] { 3, 4 } }, new[] { new[] { -5, 5 }, new[] { 7, -7 } }, new[] { new[] { 9, 1 }, new[] { 1, 9 } }, new[] { new[] { 0, 0 }, new[] { 2, 2 } }, new[] { new[] { -3, 3 }, new[] { 6, -6 } }, new[] { new[] { 4, 8 }, new[] { 16, 32 } } };
+
+        var refD = new double[doubleInputs.Length][];
+        var refI = new int[intInputs.Length][];
+        var refDA = new double[doubleArrInputs.Length][][];
+        var refIA = new int[intArrInputs.Length][][];
+        for (var i = 0; i < doubleInputs.Length; i++)
+        {
+            refD[i] = new double[2];
+            new ReferenceGenomeEvaluator<double>(doubleFns).Evaluate(doubleGenome, doubleInputs[i], refD[i]);
+            refI[i] = new int[1];
+            new ReferenceGenomeEvaluator<int>(intFns).Evaluate(intGenome, intInputs[i], refI[i]);
+            refDA[i] = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(doubleArrFns).Evaluate(doubleArrGenome, doubleArrInputs[i], refDA[i]);
+            refIA[i] = new int[1][];
+            new ReferenceGenomeEvaluator<int[]>(intArrFns).Evaluate(intArrGenome, intArrInputs[i], refIA[i]);
+        }
+
+        double[][]? baselineD = null;
+        double[][][]? baselineDA = null;
+        foreach (var workerCount in new[] { 1, 2, 4 })
+        {
+            var gotD = new double[doubleInputs.Length][];
+            var gotI = new int[intInputs.Length][];
+            var gotDA = new double[doubleArrInputs.Length][][];
+            var gotIA = new int[intArrInputs.Length][][];
+            var indices = Enumerable.Range(0, doubleInputs.Length).ToArray();
+            ShuffleDeterministic(indices, seed: workerCount);
+
+            Parallel.ForEach(indices, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, idx =>
+            {
+                using var evD = new IlgpuGenomeEvaluator<double>(doubleFns, null, selection, null, null, null);
+                gotD[idx] = new double[2];
+                evD.Evaluate(doubleGenome, doubleInputs[idx], gotD[idx]);
+                AssertDeviceEvaluation(evD, doubleGenome, doubleFns, selection);
+
+                using var evI = new IlgpuGenomeEvaluator<int>(intFns, null, selection, null, null, null);
+                gotI[idx] = new int[1];
+                evI.Evaluate(intGenome, intInputs[idx], gotI[idx]);
+                AssertDeviceEvaluation(evI, intGenome, intFns, selection);
+
+                using var evDA = new IlgpuGenomeEvaluator<double[]>(doubleArrFns, null, selection, null, null, null);
+                gotDA[idx] = new double[1][];
+                evDA.Evaluate(doubleArrGenome, doubleArrInputs[idx], gotDA[idx]);
+                AssertDeviceEvaluation(evDA, doubleArrGenome, doubleArrFns, selection);
+
+                using var evIA = new IlgpuGenomeEvaluator<int[]>(intArrFns, null, selection, null, null, null);
+                gotIA[idx] = new int[1][];
+                evIA.Evaluate(intArrGenome, intArrInputs[idx], gotIA[idx]);
+                AssertDeviceEvaluation(evIA, intArrGenome, intArrFns, selection);
+            });
+
+            for (var i = 0; i < doubleInputs.Length; i++)
+            {
+                IlgpuTestHelpers.AssertDoubleArrayClose(refD[i], gotD[i], $"{label} workers={workerCount} double caso={i}");
+                Assert.Equal(refI[i], gotI[i]);
+                Assert.Equal(refDA[i][0], gotDA[i][0]);
+                Assert.Equal(refIA[i][0], gotIA[i][0]);
+            }
+
+            if (baselineD is null)
+            {
+                baselineD = gotD;
+                baselineDA = gotDA;
+                continue;
+            }
+
+            for (var i = 0; i < doubleInputs.Length; i++)
+            {
+                Assert.Equal(BitConverter.DoubleToInt64Bits(baselineD[i][0]), BitConverter.DoubleToInt64Bits(gotD[i][0]));
+                Assert.Equal(BitConverter.DoubleToInt64Bits(baselineD[i][1]), BitConverter.DoubleToInt64Bits(gotD[i][1]));
+                for (var k = 0; k < baselineDA![i][0].Length; k++)
+                {
+                    Assert.Equal(BitConverter.DoubleToInt64Bits(baselineDA[i][0][k]), BitConverter.DoubleToInt64Bits(gotDA[i][0][k]));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Seleção inicial sem runtime (falha causal) compartilhada por vários workers: os quatro tipos produzem
+    /// CpuFallback com paridade contra a referência, sem kernel e sem dispositivo, e o motivo é preservado.
+    /// </summary>
+    [Fact]
+    public void Initial_selection_failure_shared_by_workers_yields_causal_cpu_fallback_for_four_types()
+    {
+        var fallbackSelection = IlgpuBackendSelector.ProbeForTests(
+            static () => throw new DllNotFoundException("runtime-ausente"),
+            static (_, _) => throw new UnreachableException());
+        Assert.Equal(IlgpuBackendKind.CpuFallback, fallbackSelection.Kind);
+
+        var doubleFns = StandardDoubleFunctionSet.Instance;
+        var doubleGenome = DoubleScenario(doubleFns);
+        var doubleInputs = new[] { 3.0, -0.5 };
+        var intFns = StandardInt32FunctionSet.Instance;
+        var intGenome = IntScenario(intFns);
+        var intInputs = new[] { -4, 7 };
+        var daFns = StandardDoubleArrayFunctionSet.Instance;
+        var daGenome = DoubleArrayScenario(daFns);
+        var daInputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+        var iaFns = StandardInt32ArrayFunctionSet.Instance;
+        var iaGenome = IntArrayScenario(iaFns);
+        var iaInputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+
+        var refD = new double[2];
+        new ReferenceGenomeEvaluator<double>(doubleFns).Evaluate(doubleGenome, doubleInputs, refD);
+        var refI = new int[1];
+        new ReferenceGenomeEvaluator<int>(intFns).Evaluate(intGenome, intInputs, refI);
+        var refDA = new double[1][];
+        new ReferenceGenomeEvaluator<double[]>(daFns).Evaluate(daGenome, daInputs, refDA);
+        var refIA = new int[1][];
+        new ReferenceGenomeEvaluator<int[]>(iaFns).Evaluate(iaGenome, iaInputs, refIA);
+
+        foreach (var workerCount in new[] { 1, 2, 4 })
+        {
+            Parallel.For(0, workerCount, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, _ =>
+            {
+                using var evD = new IlgpuGenomeEvaluator<double>(doubleFns, null, fallbackSelection, null, null, null);
+                var outD = new double[2];
+                evD.Evaluate(doubleGenome, doubleInputs, outD);
+                AssertCausalFallback(evD);
+                IlgpuTestHelpers.AssertDoubleArrayClose(refD, outD, $"fallback double workers={workerCount}");
+
+                using var evI = new IlgpuGenomeEvaluator<int>(intFns, null, fallbackSelection, null, null, null);
+                var outI = new int[1];
+                evI.Evaluate(intGenome, intInputs, outI);
+                AssertCausalFallback(evI);
+                Assert.Equal(refI, outI);
+
+                using var evDA = new IlgpuGenomeEvaluator<double[]>(daFns, null, fallbackSelection, null, null, null);
+                var outDA = new double[1][];
+                evDA.Evaluate(daGenome, daInputs, outDA);
+                AssertCausalFallback(evDA);
+                Assert.Equal(refDA[0], outDA[0]);
+
+                using var evIA = new IlgpuGenomeEvaluator<int[]>(iaFns, null, fallbackSelection, null, null, null);
+                var outIA = new int[1][];
+                evIA.Evaluate(iaGenome, iaInputs, outIA);
+                AssertCausalFallback(evIA);
+                Assert.Equal(refIA[0], outIA[0]);
+            });
+        }
+    }
+
+    private static void AssertCausalFallback<T>(IlgpuGenomeEvaluator<T> evaluator)
+    {
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.Contains("DllNotFoundException", evaluator.LastFallbackReason);
     }
 
     [Theory]
