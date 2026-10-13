@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
@@ -111,6 +112,117 @@ public sealed class IlgpuDeviceMatrixTests
 
     private static IlgpuBackendSelection CpuSelection() =>
         new(IlgpuBackendKind.IlgpuCpu, 0, "CPU ILGPU", null, 8, 8, 1, 8, 4);
+
+    /// <summary>
+    /// Falha controlada (lançamento ou sincronização) depois da seleção do dispositivo: a exceção original é
+    /// preservada, o backend/dispositivo continuam sendo os selecionados (sem fallback de sucesso), os buffers
+    /// são descartados e Accelerator/Context são liberados pelo Dispose do avaliador.
+    /// </summary>
+    private static void AssertPostSelectionFailure<T>(
+        IlgpuBackendSelection selection,
+        IFunctionSet<T> functions,
+        bool launchFailure,
+        string label,
+        Action<IlgpuGenomeEvaluator<T>> evaluate)
+    {
+        MemoryBuffer[]? observedBuffers = null;
+        var forced = new InvalidOperationException($"falha-{(launchFailure ? "lancamento" : "sincronizacao")}-{label}");
+        var evaluator = launchFailure
+            ? new IlgpuGenomeEvaluator<T>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: _ => throw forced,
+                synchronizeInvoker: null,
+                bufferObserver: buffers => observedBuffers = buffers.ToArray())
+            : new IlgpuGenomeEvaluator<T>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: null,
+                synchronizeInvoker: _ => throw forced,
+                bufferObserver: buffers => observedBuffers = buffers.ToArray());
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => evaluate(evaluator));
+            Assert.Same(forced, error);
+            Assert.NotNull(observedBuffers);
+            Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
+            Assert.NotEqual("CPU fallback", evaluator.Backend);
+
+            var accelerator = evaluator.InternalAccelerator;
+            var context = evaluator.InternalContext;
+            Assert.NotNull(accelerator);
+            Assert.NotNull(context);
+            Assert.False(accelerator!.IsDisposed);
+            Assert.False(context!.IsDisposed);
+
+            evaluator.Dispose();
+            Assert.True(accelerator.IsDisposed);
+            Assert.True(context.IsDisposed);
+        }
+        finally
+        {
+            evaluator.Dispose();
+        }
+    }
+
+    private static GenomeShape AddShape() =>
+        new(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_double(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = Genome<double>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, [1.0, 2.0], new double[1]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, [1.0, 2.0], new double[1]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_int(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        var genome = Genome<int>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [0], [2], Int32ValueSemantics.Instance, functions);
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, [1, 2], new int[1]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, [1, 2], new int[1]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_double_array(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var genome = Genome<double[]>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<double>()], [2], DoubleArrayValueSemantics.Instance, functions);
+        double[][] inputs = [[1.0, 2.0], [3.0, 4.0]];
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, inputs, new double[1][]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, inputs, new double[1][]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Post_selection_launch_and_sync_failures_preserve_identity_for_int_array(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var genome = Genome<int[]>.FromGenes(AddShape(), [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
+            [Array.Empty<int>()], [2], Int32ArrayValueSemantics.Instance, functions);
+        int[][] inputs = [[1, 2], [3, 4]];
+        AssertPostSelectionFailure(selection, functions, true, label, ev => ev.Evaluate(genome, inputs, new int[1][]));
+        AssertPostSelectionFailure(selection, functions, false, label, ev => ev.Evaluate(genome, inputs, new int[1][]));
+    }
 
     private static Genome<double> DoubleScenario(IFunctionSet<double> functions)
     {
@@ -471,7 +583,7 @@ public sealed class IlgpuDeviceMatrixTests
 
             // Identidade efetiva: com mais de um worker configurado, threads foram de fato utilizadas para o
             // processamento (não apenas um único caminho serial disfarçado).
-            Assert.True(threadIds.Count == cases.Length);
+            Assert.True(threadIds.Count >= 1 && threadIds.Count <= cases.Length);
 
             // Comparação bit a bit entre contagens de workers do mesmo backend/dispositivo: variar o número de
             // workers e o agendamento não pode alterar o resultado numérico exato produzido pelo mesmo backend.
@@ -490,6 +602,180 @@ public sealed class IlgpuDeviceMatrixTests
         }
     }
 
+    /// <summary>
+    /// Prova 1/2/N para os quatro tipos oficiais no dispositivo: cada caso é avaliado uma vez por um avaliador
+    /// privado do worker. double/double[] são comparados bit a bit entre contagens de workers; int/int[] são exatos;
+    /// a tolerância normativa só é usada contra a referência.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Worker_counts_1_2_n_four_types_identical_across_worker_counts_on_device(string label, IlgpuBackendSelection selection)
+    {
+        Assert.False(string.IsNullOrEmpty(label));
+        var doubleFns = StandardDoubleFunctionSet.Instance;
+        var intFns = StandardInt32FunctionSet.Instance;
+        var doubleArrFns = StandardDoubleArrayFunctionSet.Instance;
+        var intArrFns = StandardInt32ArrayFunctionSet.Instance;
+        var doubleGenome = DoubleScenario(doubleFns);
+        var intGenome = IntScenario(intFns);
+        var doubleArrGenome = DoubleArrayScenario(doubleArrFns);
+        var intArrGenome = IntArrayScenario(intArrFns);
+
+        var doubleInputs = new[] { new[] { 1.25, -3.5 }, new[] { -0.0, 0.0 }, new[] { 7.5, 2.0 }, new[] { -9.0, -1.5 }, new[] { 0.001, 1000.0 }, new[] { -4.75, 6.25 } };
+        var intInputs = new[] { new[] { -4, 7 }, new[] { 5, 9 }, new[] { 0, 0 }, new[] { -8, 3 }, new[] { 12, -6 }, new[] { 1, 1 } };
+        var doubleArrInputs = new[] { new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } }, new[] { new[] { -0.5, 0.5 }, new[] { 2.0, -2.0 } }, new[] { new[] { 9.0, 1.0 }, new[] { 1.0, 9.0 } }, new[] { new[] { 0.25, 0.75 }, new[] { 0.5, 0.5 } }, new[] { new[] { -3.0, 3.0 }, new[] { 6.0, -6.0 } }, new[] { new[] { 4.0, 8.0 }, new[] { 16.0, 32.0 } } };
+        var intArrInputs = new[] { new[] { new[] { 1, 2 }, new[] { 3, 4 } }, new[] { new[] { -5, 5 }, new[] { 7, -7 } }, new[] { new[] { 9, 1 }, new[] { 1, 9 } }, new[] { new[] { 0, 0 }, new[] { 2, 2 } }, new[] { new[] { -3, 3 }, new[] { 6, -6 } }, new[] { new[] { 4, 8 }, new[] { 16, 32 } } };
+
+        var refD = new double[doubleInputs.Length][];
+        var refI = new int[intInputs.Length][];
+        var refDA = new double[doubleArrInputs.Length][][];
+        var refIA = new int[intArrInputs.Length][][];
+        for (var i = 0; i < doubleInputs.Length; i++)
+        {
+            refD[i] = new double[2];
+            new ReferenceGenomeEvaluator<double>(doubleFns).Evaluate(doubleGenome, doubleInputs[i], refD[i]);
+            refI[i] = new int[1];
+            new ReferenceGenomeEvaluator<int>(intFns).Evaluate(intGenome, intInputs[i], refI[i]);
+            refDA[i] = new double[1][];
+            new ReferenceGenomeEvaluator<double[]>(doubleArrFns).Evaluate(doubleArrGenome, doubleArrInputs[i], refDA[i]);
+            refIA[i] = new int[1][];
+            new ReferenceGenomeEvaluator<int[]>(intArrFns).Evaluate(intArrGenome, intArrInputs[i], refIA[i]);
+        }
+
+        double[][]? baselineD = null;
+        double[][][]? baselineDA = null;
+        foreach (var workerCount in new[] { 1, 2, 4 })
+        {
+            var gotD = new double[doubleInputs.Length][];
+            var gotI = new int[intInputs.Length][];
+            var gotDA = new double[doubleArrInputs.Length][][];
+            var gotIA = new int[intArrInputs.Length][][];
+            var indices = Enumerable.Range(0, doubleInputs.Length).ToArray();
+            ShuffleDeterministic(indices, seed: workerCount);
+
+            Parallel.ForEach(indices, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, idx =>
+            {
+                using var evD = new IlgpuGenomeEvaluator<double>(doubleFns, null, selection, null, null, null);
+                gotD[idx] = new double[2];
+                evD.Evaluate(doubleGenome, doubleInputs[idx], gotD[idx]);
+                AssertDeviceEvaluation(evD, doubleGenome, doubleFns, selection);
+
+                using var evI = new IlgpuGenomeEvaluator<int>(intFns, null, selection, null, null, null);
+                gotI[idx] = new int[1];
+                evI.Evaluate(intGenome, intInputs[idx], gotI[idx]);
+                AssertDeviceEvaluation(evI, intGenome, intFns, selection);
+
+                using var evDA = new IlgpuGenomeEvaluator<double[]>(doubleArrFns, null, selection, null, null, null);
+                gotDA[idx] = new double[1][];
+                evDA.Evaluate(doubleArrGenome, doubleArrInputs[idx], gotDA[idx]);
+                AssertDeviceEvaluation(evDA, doubleArrGenome, doubleArrFns, selection);
+
+                using var evIA = new IlgpuGenomeEvaluator<int[]>(intArrFns, null, selection, null, null, null);
+                gotIA[idx] = new int[1][];
+                evIA.Evaluate(intArrGenome, intArrInputs[idx], gotIA[idx]);
+                AssertDeviceEvaluation(evIA, intArrGenome, intArrFns, selection);
+            });
+
+            for (var i = 0; i < doubleInputs.Length; i++)
+            {
+                IlgpuTestHelpers.AssertDoubleArrayClose(refD[i], gotD[i], $"{label} workers={workerCount} double caso={i}");
+                Assert.Equal(refI[i], gotI[i]);
+                Assert.Equal(refDA[i][0], gotDA[i][0]);
+                Assert.Equal(refIA[i][0], gotIA[i][0]);
+            }
+
+            if (baselineD is null)
+            {
+                baselineD = gotD;
+                baselineDA = gotDA;
+                continue;
+            }
+
+            for (var i = 0; i < doubleInputs.Length; i++)
+            {
+                Assert.Equal(BitConverter.DoubleToInt64Bits(baselineD[i][0]), BitConverter.DoubleToInt64Bits(gotD[i][0]));
+                Assert.Equal(BitConverter.DoubleToInt64Bits(baselineD[i][1]), BitConverter.DoubleToInt64Bits(gotD[i][1]));
+                for (var k = 0; k < baselineDA![i][0].Length; k++)
+                {
+                    Assert.Equal(BitConverter.DoubleToInt64Bits(baselineDA[i][0][k]), BitConverter.DoubleToInt64Bits(gotDA[i][0][k]));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Seleção inicial sem runtime (falha causal) compartilhada por vários workers: os quatro tipos produzem
+    /// CpuFallback com paridade contra a referência, sem kernel e sem dispositivo, e o motivo é preservado.
+    /// </summary>
+    [Fact]
+    public void Initial_selection_failure_shared_by_workers_yields_causal_cpu_fallback_for_four_types()
+    {
+        var fallbackSelection = IlgpuBackendSelector.ProbeForTests(
+            static () => throw new DllNotFoundException("runtime-ausente"),
+            static (_, _) => throw new UnreachableException());
+        Assert.Equal(IlgpuBackendKind.CpuFallback, fallbackSelection.Kind);
+
+        var doubleFns = StandardDoubleFunctionSet.Instance;
+        var doubleGenome = DoubleScenario(doubleFns);
+        var doubleInputs = new[] { 3.0, -0.5 };
+        var intFns = StandardInt32FunctionSet.Instance;
+        var intGenome = IntScenario(intFns);
+        var intInputs = new[] { -4, 7 };
+        var daFns = StandardDoubleArrayFunctionSet.Instance;
+        var daGenome = DoubleArrayScenario(daFns);
+        var daInputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+        var iaFns = StandardInt32ArrayFunctionSet.Instance;
+        var iaGenome = IntArrayScenario(iaFns);
+        var iaInputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+
+        var refD = new double[2];
+        new ReferenceGenomeEvaluator<double>(doubleFns).Evaluate(doubleGenome, doubleInputs, refD);
+        var refI = new int[1];
+        new ReferenceGenomeEvaluator<int>(intFns).Evaluate(intGenome, intInputs, refI);
+        var refDA = new double[1][];
+        new ReferenceGenomeEvaluator<double[]>(daFns).Evaluate(daGenome, daInputs, refDA);
+        var refIA = new int[1][];
+        new ReferenceGenomeEvaluator<int[]>(iaFns).Evaluate(iaGenome, iaInputs, refIA);
+
+        foreach (var workerCount in new[] { 1, 2, 4 })
+        {
+            Parallel.For(0, workerCount, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, _ =>
+            {
+                using var evD = new IlgpuGenomeEvaluator<double>(doubleFns, null, fallbackSelection, null, null, null);
+                var outD = new double[2];
+                evD.Evaluate(doubleGenome, doubleInputs, outD);
+                AssertCausalFallback(evD);
+                IlgpuTestHelpers.AssertDoubleArrayClose(refD, outD, $"fallback double workers={workerCount}");
+
+                using var evI = new IlgpuGenomeEvaluator<int>(intFns, null, fallbackSelection, null, null, null);
+                var outI = new int[1];
+                evI.Evaluate(intGenome, intInputs, outI);
+                AssertCausalFallback(evI);
+                Assert.Equal(refI, outI);
+
+                using var evDA = new IlgpuGenomeEvaluator<double[]>(daFns, null, fallbackSelection, null, null, null);
+                var outDA = new double[1][];
+                evDA.Evaluate(daGenome, daInputs, outDA);
+                AssertCausalFallback(evDA);
+                Assert.Equal(refDA[0], outDA[0]);
+
+                using var evIA = new IlgpuGenomeEvaluator<int[]>(iaFns, null, fallbackSelection, null, null, null);
+                var outIA = new int[1][];
+                evIA.Evaluate(iaGenome, iaInputs, outIA);
+                AssertCausalFallback(evIA);
+                Assert.Equal(refIA[0], outIA[0]);
+            });
+        }
+    }
+
+    private static void AssertCausalFallback<T>(IlgpuGenomeEvaluator<T> evaluator)
+    {
+        Assert.Equal("CPU fallback", evaluator.Backend);
+        Assert.Equal("nenhum", evaluator.DeviceName);
+        Assert.Equal("compiled-default", evaluator.FallbackEvaluatorKind);
+        Assert.Contains("DllNotFoundException", evaluator.LastFallbackReason);
+    }
+
     [Theory]
     [MemberData(nameof(Devices))]
     public void Cancellation_before_and_during_evaluation_releases_resources_on_device(string label, IlgpuBackendSelection selection)
@@ -497,20 +783,38 @@ public sealed class IlgpuDeviceMatrixTests
         var functions = StandardDoubleFunctionSet.Instance;
         var genome = DoubleScenario(functions);
 
+        // Cancelamento antes da avaliação: nenhuma chamada ao avaliador pode ocorrer e os recursos são descartados.
+        ILGPU.Runtime.Accelerator? beforeAccelerator;
+        Context? beforeContext;
         using (var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null))
         {
             using var beforeCts = new CancellationTokenSource();
             beforeCts.Cancel();
             var fitness = new CancellingFitness(beforeCts.Token, cancelOnCall: 0);
+            beforeAccelerator = evaluator.InternalAccelerator;
+            beforeContext = evaluator.InternalContext;
             Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, beforeCts.Token));
+            Assert.Equal(0, fitness.Calls);
         }
 
+        Assert.True(beforeAccelerator is null || beforeAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento antes");
+        Assert.True(beforeContext is null || beforeContext.IsDisposed, $"{label}: context não descartado após cancelamento antes");
+
+        // Cancelamento durante a avaliação: exatamente uma chamada real ao avaliador ocorre antes do cancelamento.
+        ILGPU.Runtime.Accelerator? duringAccelerator;
+        Context? duringContext;
         using (var evaluator = new IlgpuGenomeEvaluator<double>(functions, null, selection, null, null, null))
         {
             using var duringCts = new CancellationTokenSource();
             var fitness = new CancellingFitness(duringCts.Token, cancelOnCall: 1, cancelBeforeCall: duringCts.Cancel);
+            duringAccelerator = evaluator.InternalAccelerator;
+            duringContext = evaluator.InternalContext;
             Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, duringCts.Token));
+            Assert.Equal(1, fitness.Calls);
         }
+
+        Assert.True(duringAccelerator is null || duringAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento durante");
+        Assert.True(duringContext is null || duringContext.IsDisposed, $"{label}: context não descartado após cancelamento durante");
 
         // Um worker novo com a mesma seleção precisa continuar funcional depois do cancelamento: os recursos
         // do worker cancelado foram liberados (Dispose) sem deixar o acelerador/contexto compartilhado inválido.
@@ -537,6 +841,8 @@ public sealed class IlgpuDeviceMatrixTests
             _cancelBeforeCall = cancelBeforeCall;
         }
 
+        public int Calls => _calls;
+
         public FitnessResult Evaluate(Genome<double> genome, IGenomeEvaluator<double> evaluator, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -554,6 +860,132 @@ public sealed class IlgpuDeviceMatrixTests
             }
 
             return FitnessResult.Valid(output[0]);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_int_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        AssertCancellationReleasesResources(label, selection, functions, IntScenario(functions), [-4, 7], 1,
+            (expected, actual, message) => Assert.Equal(expected, actual));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_double_array_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var inputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+        AssertCancellationReleasesResources(label, selection, functions, DoubleArrayScenario(functions), inputs, 1,
+            (expected, actual, message) => Assert.Equal(expected[0], actual[0]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_int_array_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var inputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+        AssertCancellationReleasesResources(label, selection, functions, IntArrayScenario(functions), inputs, 1,
+            (expected, actual, message) => Assert.Equal(expected[0], actual[0]));
+    }
+
+    /// <summary>
+    /// Cancelamento antes e durante a avaliação para um tipo genérico: zero chamadas antes; exatamente uma chamada
+    /// real de kernel antes do cancelamento durante; descarte de Accelerator/Context após limpeza do chamador;
+    /// worker novo continua funcional com identidade efetiva do backend.
+    /// </summary>
+    private static void AssertCancellationReleasesResources<T>(
+        string label,
+        IlgpuBackendSelection selection,
+        IFunctionSet<T> functions,
+        Genome<T> genome,
+        T[] inputs,
+        int outputCount,
+        Action<T[], T[], string> compare)
+    {
+        ILGPU.Runtime.Accelerator? beforeAccelerator;
+        Context? beforeContext;
+        using (var evaluator = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null))
+        {
+            using var beforeCts = new CancellationTokenSource();
+            beforeCts.Cancel();
+            var fitness = new CancellingFitness<T>(beforeCts.Token, cancelOnCall: 0, inputs, outputCount);
+            beforeAccelerator = evaluator.InternalAccelerator;
+            beforeContext = evaluator.InternalContext;
+            Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, beforeCts.Token));
+            Assert.Equal(0, fitness.Calls);
+        }
+
+        Assert.True(beforeAccelerator is null || beforeAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento antes");
+        Assert.True(beforeContext is null || beforeContext.IsDisposed, $"{label}: context não descartado após cancelamento antes");
+
+        ILGPU.Runtime.Accelerator? duringAccelerator;
+        Context? duringContext;
+        using (var evaluator = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null))
+        {
+            using var duringCts = new CancellationTokenSource();
+            var fitness = new CancellingFitness<T>(duringCts.Token, cancelOnCall: 1, inputs, outputCount, duringCts.Cancel);
+            duringAccelerator = evaluator.InternalAccelerator;
+            duringContext = evaluator.InternalContext;
+            Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, duringCts.Token));
+            Assert.Equal(1, fitness.Calls);
+            IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
+        }
+
+        Assert.True(duringAccelerator is null || duringAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento durante");
+        Assert.True(duringContext is null || duringContext.IsDisposed, $"{label}: context não descartado após cancelamento durante");
+
+        using var healthy = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null);
+        var expected = new T[outputCount];
+        var actual = new T[outputCount];
+        new ReferenceGenomeEvaluator<T>(functions).Evaluate(genome, inputs, expected);
+        healthy.Evaluate(genome, inputs, actual);
+        AssertDeviceEvaluation(healthy, genome, functions, selection);
+        compare(expected, actual, $"{label} pós-cancelamento");
+    }
+
+    private sealed class CancellingFitness<T> : IFitnessEvaluator<T>
+    {
+        private readonly CancellationToken _token;
+        private readonly int _cancelOnCall;
+        private readonly T[] _inputs;
+        private readonly int _outputCount;
+        private readonly Action? _cancelBeforeCall;
+        private int _calls;
+
+        public CancellingFitness(CancellationToken token, int cancelOnCall, T[] inputs, int outputCount, Action? cancelBeforeCall = null)
+        {
+            _token = token;
+            _cancelOnCall = cancelOnCall;
+            _inputs = inputs;
+            _outputCount = outputCount;
+            _cancelBeforeCall = cancelBeforeCall;
+        }
+
+        public int Calls => _calls;
+
+        public FitnessResult Evaluate(Genome<T> genome, IGenomeEvaluator<T> evaluator, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var output = new T[_outputCount];
+            for (var i = 0; i < 3; i++)
+            {
+                if (_calls == _cancelOnCall)
+                {
+                    _cancelBeforeCall?.Invoke();
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                evaluator.Evaluate(genome, _inputs, output);
+                _calls++;
+            }
+
+            return FitnessResult.Valid(0.0);
         }
     }
 

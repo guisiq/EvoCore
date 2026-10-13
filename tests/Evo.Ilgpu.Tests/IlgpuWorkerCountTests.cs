@@ -330,14 +330,19 @@ public sealed class IlgpuWorkerCountTests
             // Worker 2: a inicialização do acelerador lança OutOfMemoryException. A exceção original deve
             // propagar sem ser substituída, com o contexto parcial liberado.
             Context? partialContext = null;
-            var oomFailure = Assert.Throws<OutOfMemoryException>(() => new IlgpuGenomeEvaluator<double>(
+            var oomFailure = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
                 StandardDoubleFunctionSet.Instance,
                 fallback: null,
                 selectionOverride: selection,
                 contextFactory: _ => partialContext = Context.Create(builder => builder.CPU()),
                 acceleratorFactory: (_, _) => throw new OutOfMemoryException("oom-init-worker-controlada"),
                 beforeKernelExecution: null));
-            Assert.Equal("oom-init-worker-controlada", oomFailure.Message);
+            Assert.Equal(selection.BackendName, oomFailure.Backend);
+            Assert.True(oomFailure.WorkerId > healthy.WorkerId);
+            Assert.Contains("OutOfMemoryException", oomFailure.Cause);
+            Assert.Contains("oom-init-worker-controlada", oomFailure.Cause);
+            var originalOom = Assert.IsType<OutOfMemoryException>(oomFailure.InnerException);
+            Assert.Equal("oom-init-worker-controlada", originalOom.Message);
             Assert.NotNull(partialContext);
             Assert.True(partialContext!.IsDisposed);
 

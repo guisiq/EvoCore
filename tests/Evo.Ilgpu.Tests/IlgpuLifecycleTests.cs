@@ -224,7 +224,7 @@ public sealed class IlgpuLifecycleTests
 
         try
         {
-            var thrown = Assert.Throws<OutOfMemoryException>(() =>
+            var thrown = Assert.Throws<IlgpuBackendInitializationException>(() =>
                 new IlgpuGenomeEvaluator<double>(
                     functions,
                     fallback: null,
@@ -237,7 +237,9 @@ public sealed class IlgpuLifecycleTests
                     acceleratorFactory: static (_, _) => throw new OutOfMemoryException("sem-memoria"),
                     beforeKernelExecution: null));
 
-            Assert.Equal("sem-memoria", thrown.Message);
+            Assert.Equal(selection.BackendName, thrown.Backend);
+            Assert.Contains("sem-memoria", thrown.Cause);
+            Assert.Equal("sem-memoria", Assert.IsType<OutOfMemoryException>(thrown.InnerException).Message);
             Assert.NotNull(createdContext);
             Assert.True(createdContext!.IsDisposed);
         }
