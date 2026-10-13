@@ -62,11 +62,12 @@ public sealed class PublicContractsTests
     }
 
     [Fact]
-    public void BatchFitnessEvaluatorIsNotPresentInV1()
+    public void BatchFitnessEvaluatorIsAdditiveCapabilityOfIndividualContract()
     {
-        Assert.DoesNotContain(
-            CoreAssembly.GetExportedTypes(),
-            t => t.Name.StartsWith("IBatchFitnessEvaluator", StringComparison.Ordinal));
+        var batch = CoreAssembly.GetType("Evo.Core.IBatchFitnessEvaluator`1", throwOnError: true)!;
+        var individual = CoreAssembly.GetType("Evo.Core.IFitnessEvaluator`1", throwOnError: true)!;
+
+        Assert.Contains(batch.GetInterfaces(), i => i.IsGenericType && i.GetGenericTypeDefinition() == individual);
     }
 
     [Fact]

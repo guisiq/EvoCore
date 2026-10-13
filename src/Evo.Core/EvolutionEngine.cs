@@ -284,13 +284,39 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
 
         var results = new FitnessResult[missing.Count];
         var workers = fitnessEvaluators.Length;
-        Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, w =>
+        if (fitnessEvaluators[0] is IBatchFitnessEvaluator<T> batchEvaluator)
         {
-            for (var p = w; p < missing.Count; p += workers)
+            // Lotes são fatias contíguas de `missing` (ordem fixa); cada lote é atribuído a um worker
+            // por índice. O resultado não depende do tamanho do lote nem do número de workers.
+            var batchSize = Math.Max(1, batchEvaluator.PreferredBatchSize);
+            var batchCount = (missing.Count + batchSize - 1) / batchSize;
+            Parallel.For(0, Math.Min(workers, batchCount), new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, w =>
             {
-                results[p] = fitnessEvaluators[w].Evaluate(population[missing[p]], genomeEvaluators[w], cancellationToken);
-            }
-        });
+                for (var b = w; b < batchCount; b += workers)
+                {
+                    var start = b * batchSize;
+                    var length = Math.Min(batchSize, missing.Count - start);
+                    var genomes = new Genome<T>[length];
+                    for (var k = 0; k < length; k++)
+                    {
+                        genomes[k] = population[missing[start + k]];
+                    }
+
+                    var evaluator = (IBatchFitnessEvaluator<T>)fitnessEvaluators[w];
+                    evaluator.EvaluateBatch(genomes, genomeEvaluators[w], results.AsSpan(start, length), cancellationToken);
+                }
+            });
+        }
+        else
+        {
+            Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, w =>
+            {
+                for (var p = w; p < missing.Count; p += workers)
+                {
+                    results[p] = fitnessEvaluators[w].Evaluate(population[missing[p]], genomeEvaluators[w], cancellationToken);
+                }
+            });
+        }
 
         if (cache.Count + missing.Count > cacheLimit)
         {
