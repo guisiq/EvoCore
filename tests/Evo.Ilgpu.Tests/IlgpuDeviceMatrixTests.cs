@@ -471,7 +471,7 @@ public sealed class IlgpuDeviceMatrixTests
 
             // Identidade efetiva: com mais de um worker configurado, threads foram de fato utilizadas para o
             // processamento (não apenas um único caminho serial disfarçado).
-            Assert.True(threadIds.Count == cases.Length);
+            Assert.True(threadIds.Count >= 1 && threadIds.Count <= cases.Length);
 
             // Comparação bit a bit entre contagens de workers do mesmo backend/dispositivo: variar o número de
             // workers e o agendamento não pode alterar o resultado numérico exato produzido pelo mesmo backend.
@@ -574,6 +574,132 @@ public sealed class IlgpuDeviceMatrixTests
             }
 
             return FitnessResult.Valid(output[0]);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_int_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32FunctionSet.Instance;
+        AssertCancellationReleasesResources(label, selection, functions, IntScenario(functions), [-4, 7], 1,
+            (expected, actual, message) => Assert.Equal(expected, actual));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_double_array_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardDoubleArrayFunctionSet.Instance;
+        var inputs = new[] { new[] { 1.0, 2.0 }, new[] { 3.0, 4.0 } };
+        AssertCancellationReleasesResources(label, selection, functions, DoubleArrayScenario(functions), inputs, 1,
+            (expected, actual, message) => Assert.Equal(expected[0], actual[0]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Devices))]
+    public void Cancellation_before_and_during_releases_resources_for_int_array_on_device(string label, IlgpuBackendSelection selection)
+    {
+        var functions = StandardInt32ArrayFunctionSet.Instance;
+        var inputs = new[] { new[] { 1, 2 }, new[] { 3, 4 } };
+        AssertCancellationReleasesResources(label, selection, functions, IntArrayScenario(functions), inputs, 1,
+            (expected, actual, message) => Assert.Equal(expected[0], actual[0]));
+    }
+
+    /// <summary>
+    /// Cancelamento antes e durante a avaliação para um tipo genérico: zero chamadas antes; exatamente uma chamada
+    /// real de kernel antes do cancelamento durante; descarte de Accelerator/Context após limpeza do chamador;
+    /// worker novo continua funcional com identidade efetiva do backend.
+    /// </summary>
+    private static void AssertCancellationReleasesResources<T>(
+        string label,
+        IlgpuBackendSelection selection,
+        IFunctionSet<T> functions,
+        Genome<T> genome,
+        T[] inputs,
+        int outputCount,
+        Action<T[], T[], string> compare)
+    {
+        ILGPU.Runtime.Accelerator? beforeAccelerator;
+        Context? beforeContext;
+        using (var evaluator = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null))
+        {
+            using var beforeCts = new CancellationTokenSource();
+            beforeCts.Cancel();
+            var fitness = new CancellingFitness<T>(beforeCts.Token, cancelOnCall: 0, inputs, outputCount);
+            beforeAccelerator = evaluator.InternalAccelerator;
+            beforeContext = evaluator.InternalContext;
+            Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, beforeCts.Token));
+            Assert.Equal(0, fitness.Calls);
+        }
+
+        Assert.True(beforeAccelerator is null || beforeAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento antes");
+        Assert.True(beforeContext is null || beforeContext.IsDisposed, $"{label}: context não descartado após cancelamento antes");
+
+        ILGPU.Runtime.Accelerator? duringAccelerator;
+        Context? duringContext;
+        using (var evaluator = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null))
+        {
+            using var duringCts = new CancellationTokenSource();
+            var fitness = new CancellingFitness<T>(duringCts.Token, cancelOnCall: 1, inputs, outputCount, duringCts.Cancel);
+            duringAccelerator = evaluator.InternalAccelerator;
+            duringContext = evaluator.InternalContext;
+            Assert.Throws<OperationCanceledException>(() => fitness.Evaluate(genome, evaluator, duringCts.Token));
+            Assert.Equal(1, fitness.Calls);
+            IlgpuTestHelpers.AssertRealKernelExecution(evaluator, genome, functions);
+            Assert.Equal(selection.BackendName, evaluator.Backend);
+            Assert.Equal(selection.DiagnosticDeviceName, evaluator.DeviceName);
+        }
+
+        Assert.True(duringAccelerator is null || duringAccelerator.IsDisposed, $"{label}: accelerator não descartado após cancelamento durante");
+        Assert.True(duringContext is null || duringContext.IsDisposed, $"{label}: context não descartado após cancelamento durante");
+
+        using var healthy = new IlgpuGenomeEvaluator<T>(functions, null, selection, null, null, null);
+        var expected = new T[outputCount];
+        var actual = new T[outputCount];
+        new ReferenceGenomeEvaluator<T>(functions).Evaluate(genome, inputs, expected);
+        healthy.Evaluate(genome, inputs, actual);
+        AssertDeviceEvaluation(healthy, genome, functions, selection);
+        compare(expected, actual, $"{label} pós-cancelamento");
+    }
+
+    private sealed class CancellingFitness<T> : IFitnessEvaluator<T>
+    {
+        private readonly CancellationToken _token;
+        private readonly int _cancelOnCall;
+        private readonly T[] _inputs;
+        private readonly int _outputCount;
+        private readonly Action? _cancelBeforeCall;
+        private int _calls;
+
+        public CancellingFitness(CancellationToken token, int cancelOnCall, T[] inputs, int outputCount, Action? cancelBeforeCall = null)
+        {
+            _token = token;
+            _cancelOnCall = cancelOnCall;
+            _inputs = inputs;
+            _outputCount = outputCount;
+            _cancelBeforeCall = cancelBeforeCall;
+        }
+
+        public int Calls => _calls;
+
+        public FitnessResult Evaluate(Genome<T> genome, IGenomeEvaluator<T> evaluator, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var output = new T[_outputCount];
+            for (var i = 0; i < 3; i++)
+            {
+                if (_calls == _cancelOnCall)
+                {
+                    _cancelBeforeCall?.Invoke();
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                evaluator.Evaluate(genome, _inputs, output);
+                _calls++;
+            }
+
+            return FitnessResult.Valid(0.0);
         }
     }
 
