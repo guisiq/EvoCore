@@ -8,6 +8,7 @@ using Evo.Core.Functions;
 using Evo.Core.Values;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Evo.Ilgpu.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Evo.Benchmarks")]
 
 namespace Evo.Ilgpu;
 
