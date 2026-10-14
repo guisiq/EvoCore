@@ -83,6 +83,8 @@ public sealed class OpenClDeviceCatalogTests
 
         Assert.NotEmpty(lines);
         Assert.Contains(context.Devices, d => d.AcceleratorType == AcceleratorType.CPU);
+        // Assert.Contains(context.Devices, d => d.AcceleratorType == AcceleratorType.OpenCL);
+        // Assert.Contains(context.Devices, d => d.AcceleratorType == AcceleratorType.Cuda);
 
         // A configuração CPU do ILGPU precisa estar explicitamente identificada (NumThreads do dispositivo
         // CPU real desta máquina), não apenas rotulada "CPU" genericamente.

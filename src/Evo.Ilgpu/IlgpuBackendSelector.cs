@@ -1,15 +1,32 @@
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
+using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.OpenCL;
 
 namespace Evo.Ilgpu;
+
+/// <summary>Explicit per-run backend policy. <c>LegacyOpenCl</c> keeps the v2 OpenCL/CPU selection.</summary>
+public enum IlgpuBackendPolicy
+{
+    /// <summary>v2 behavior: OpenCL device, then ILGPU CPU, then CPU fallback.</summary>
+    LegacyOpenCl,
+
+    /// <summary>CUDA first; on failure falls back to the legacy selection with the cause recorded.</summary>
+    CudaPreferred,
+
+    /// <summary>Only a validated CUDA device; fails explicitly otherwise.</summary>
+    CudaRequired,
+}
 
 /// <summary>Kind of accelerator effectively selected for an ILGPU evaluation.</summary>
 public enum IlgpuBackendKind
 {
     /// <summary>ILGPU kernels executed on an OpenCL device.</summary>
     OpenClDevice,
+
+    /// <summary>ILGPU kernels executed on a NVIDIA device through the ILGPU CUDA backend.</summary>
+    CudaDevice,
 
     /// <summary>ILGPU kernels executed on the ILGPU CPU accelerator (no OpenCL device usable).</summary>
     IlgpuCpu,
@@ -31,6 +48,8 @@ public enum IlgpuBackendKind
 /// <param name="PlatformName">OpenCL platform name, when applicable.</param>
 /// <param name="PlatformId">OpenCL platform identity token, when applicable.</param>
 /// <param name="OpenClDeviceId">OpenCL device identity token, when applicable.</param>
+/// <param name="CudaPciId">PCI identity (domain:bus:device) of the CUDA device, when applicable.</param>
+/// <param name="CudaCatalog">Observable CUDA catalog entries (descoberto/validado/rejeitado) recorded during the probe.</param>
 public sealed record IlgpuBackendSelection(
     IlgpuBackendKind Kind,
     int DeviceIndex,
@@ -43,12 +62,15 @@ public sealed record IlgpuBackendSelection(
     int CpuNumThreads = 0,
     string? PlatformName = null,
     string? PlatformId = null,
-    string? OpenClDeviceId = null)
+    string? OpenClDeviceId = null,
+    string? CudaPciId = null,
+    IReadOnlyList<string>? CudaCatalog = null)
 {
     /// <summary>Human-readable backend name for diagnostics.</summary>
     public string BackendName => Kind switch
     {
         IlgpuBackendKind.OpenClDevice => "ILGPU/OpenCL",
+        IlgpuBackendKind.CudaDevice => "ILGPU/CUDA",
         IlgpuBackendKind.IlgpuCpu => "ILGPU/CPU",
         _ => "CPU fallback",
     };
@@ -118,6 +140,128 @@ public static class IlgpuBackendSelector
         IEnumerable<IlgpuBackendSelection> cpuCandidates,
         Func<IlgpuBackendSelection, Exception?> validator) =>
         SelectCandidate(openClCandidates.ToArray(), cpuCandidates.ToArray(), validator);
+
+    /// <summary>
+    /// Resolves the selection for an explicit policy. CUDA candidates are validated by loading the required
+    /// kernels before being chosen; <c>CudaRequired</c> throws when no CUDA device validates.
+    /// </summary>
+    public static IlgpuBackendSelection SelectFor(IlgpuBackendPolicy policy)
+    {
+        if (policy == IlgpuBackendPolicy.LegacyOpenCl)
+        {
+            return Selection;
+        }
+
+        var cuda = ProbeCuda();
+        if (cuda.Kind == IlgpuBackendKind.CudaDevice)
+        {
+            return cuda;
+        }
+
+        if (policy == IlgpuBackendPolicy.CudaRequired)
+        {
+            throw new InvalidOperationException($"CUDA obrigatório indisponível: {cuda.FallbackReason}");
+        }
+
+        return Selection with { FallbackReason = $"CUDA indisponível ({cuda.FallbackReason}); usando seleção legada" };
+    }
+
+    /// <summary>
+    /// Selects the CUDA device with the given physical identity (<c>domínio:barramento:dispositivo</c>),
+    /// revalidated in a fresh context. Throws explicitly when the device is absent, changed or not usable;
+    /// never falls back to another device.
+    /// </summary>
+    public static IlgpuBackendSelection SelectCudaByPciId(string pciId)
+    {
+        var selection = ProbeCuda(pciId);
+        if (selection.Kind != IlgpuBackendKind.CudaDevice)
+        {
+            throw new InvalidOperationException($"dispositivo CUDA '{pciId}' indisponível: {selection.FallbackReason}");
+        }
+
+        return selection;
+    }
+
+    private static IlgpuBackendSelection ProbeCuda(string? requiredPciId = null)
+    {
+        try
+        {
+            using var context = Context.Create(builder => builder.Cuda());
+            var devices = context.Devices.ToArray();
+            var candidates = devices
+                .Select((device, index) => (device, index))
+                .Where(item => item.device.AcceleratorType == AcceleratorType.Cuda)
+                .Select(item => CreateCudaCandidate(item.device, item.index))
+                .Where(candidate => requiredPciId is null || string.Equals(candidate.CudaPciId, requiredPciId, StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.CudaPciId, StringComparer.Ordinal)
+                .ToArray();
+            if (candidates.Length == 0)
+            {
+                return NoCuda(requiredPciId is null
+                    ? "nenhum dispositivo CUDA encontrado pelo runtime ILGPU"
+                    : $"dispositivo CUDA com identidade '{requiredPciId}' ausente ou trocado");
+            }
+
+            // Catálogo observável: cada candidato CUDA descoberto recebe estado (descoberto -> validado) e motivo de rejeição.
+            var catalog = new List<string>();
+            foreach (var candidate in candidates)
+            {
+                catalog.Add($"descoberto {candidate.DeviceName} pci={candidate.CudaPciId}");
+            }
+
+            string? lastError = null;
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    using var accelerator = context.Devices[candidate.DeviceIndex].CreateAccelerator(context);
+                    var error = ProbeRequiredKernelSupport(accelerator);
+                    if (error is null)
+                    {
+                        catalog.Add($"validado {candidate.DeviceName} pci={candidate.CudaPciId}");
+                        return candidate with { CudaCatalog = catalog.ToArray() };
+                    }
+
+                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {error.GetType().Name}: {error.Message}{InnerChain(error)}";
+                    catalog.Add($"rejeitado {candidate.DeviceName}: {error.GetType().Name}");
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {ex.GetType().Name}";
+                    catalog.Add($"rejeitado {candidate.DeviceName}: {ex.GetType().Name}");
+                }
+            }
+
+            return NoCuda(lastError ?? "nenhum dispositivo CUDA utilizável") with { CudaCatalog = catalog.ToArray() };
+        }
+        catch (Exception ex)
+        {
+            return NoCuda($"falha de inicialização do runtime CUDA: {ex.GetType().Name}");
+        }
+    }
+
+    private static string InnerChain(Exception ex) => ex.InnerException is null
+        ? string.Empty
+        : $" inner={ex.InnerException.GetType().Name}: {ex.InnerException.Message}{InnerChain(ex.InnerException)}";
+
+    private static IlgpuBackendSelection NoCuda(string reason) =>
+        new(IlgpuBackendKind.CpuFallback, -1, "nenhum", reason);
+
+    private static IlgpuBackendSelection CreateCudaCandidate(Device device, int index)
+    {
+        var cuda = (CudaDevice)device;
+        return new IlgpuBackendSelection(
+            IlgpuBackendKind.CudaDevice,
+            index,
+            device.Name,
+            null,
+            device.WarpSize,
+            device.MaxNumThreads,
+            device.NumMultiprocessors,
+            device.MaxNumThreadsPerGroup,
+            CpuNumThreads: 0,
+            CudaPciId: $"{cuda.PCIDomainId:X4}:{cuda.PCIBusId:X2}:{cuda.PCIDeviceId:X2}");
+    }
 
     private static IlgpuBackendSelection Probe() =>
         Probe(
@@ -256,6 +400,43 @@ public static class IlgpuBackendSelector
                 IlgpuGenomeEvaluator<double>.DoubleKernel);
             accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>(
                 IlgpuGenomeEvaluator<int>.IntKernel);
+            return ExecuteProbe(accelerator);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>
+    /// Executes a small proof on the accelerator for each supported value kind (<c>double</c>, <c>int</c>,
+    /// <c>double[]</c>, <c>int[]</c>) and compares the results with the CPU reference. Any mismatch or
+    /// runtime error rejects the device before it is selected.
+    /// </summary>
+    private static Exception? ExecuteProbe(Accelerator accelerator)
+    {
+        const int Length = 12;
+        var doubleInput = Enumerable.Range(0, Length).Select(i => i * 0.5 - 2.0).ToArray();
+        var intInput = Enumerable.Range(0, Length).Select(i => i * 3 - 7).ToArray();
+        var doubleArrayInput = Enumerable.Range(0, Length * 3).Select(i => i * 0.25 - 1.0).ToArray();
+        var intArrayInput = Enumerable.Range(0, Length * 3).Select(i => i * 2 - 5).ToArray();
+
+        try
+        {
+            var doubleKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<double>>(ProbeDoubleKernel);
+            var intKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<int>>(ProbeIntKernel);
+            var doubleArrayKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<double>>(ProbeDoubleKernel);
+            var intArrayKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<int>>(ProbeIntKernel);
+
+            var doubleOk = RunDoubleProbe(accelerator, doubleKernel, doubleInput);
+            var intOk = RunIntProbe(accelerator, intKernel, intInput);
+            var doubleArrayOk = RunDoubleProbe(accelerator, doubleArrayKernel, doubleArrayInput);
+            var intArrayOk = RunIntProbe(accelerator, intArrayKernel, intArrayInput);
+            if (!doubleOk || !intOk || !doubleArrayOk || !intArrayOk)
+            {
+                return new InvalidOperationException("probe de execução divergente da referência CPU");
+            }
+
             return null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -263,4 +444,48 @@ public static class IlgpuBackendSelector
             return ex;
         }
     }
+
+    private static bool RunDoubleProbe(Accelerator accelerator, Action<AcceleratorStream, Index1D, ArrayView<double>> kernel, double[] input)
+    {
+        using var buffer = accelerator.Allocate1D<double>(input.Length);
+        buffer.CopyFromCPU(input);
+        kernel(accelerator.DefaultStream, input.Length, buffer.View);
+        accelerator.Synchronize();
+        var output = new double[input.Length];
+        buffer.CopyToCPU(output);
+        for (var i = 0; i < input.Length; i++)
+        {
+            if (output[i] != input[i] * 2.0 + 1.0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool RunIntProbe(Accelerator accelerator, Action<AcceleratorStream, Index1D, ArrayView<int>> kernel, int[] input)
+    {
+        using var buffer = accelerator.Allocate1D<int>(input.Length);
+        buffer.CopyFromCPU(input);
+        kernel(accelerator.DefaultStream, input.Length, buffer.View);
+        accelerator.Synchronize();
+        var output = new int[input.Length];
+        buffer.CopyToCPU(output);
+        for (var i = 0; i < input.Length; i++)
+        {
+            if (output[i] != input[i] * 2 + 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ProbeDoubleKernel(Index1D index, ArrayView<double> data) =>
+        data[index] = data[index] * 2.0 + 1.0;
+
+    private static void ProbeIntKernel(Index1D index, ArrayView<int> data) =>
+        data[index] = data[index] * 2 + 1;
 }

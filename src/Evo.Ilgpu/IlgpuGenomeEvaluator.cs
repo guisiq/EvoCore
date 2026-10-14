@@ -1,6 +1,7 @@
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
+using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.OpenCL;
 using Evo.Core;
 using Evo.Core.Compiled;
@@ -88,6 +89,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     /// <param name="fallback">Evaluator used when the device cannot run the call; defaults to the compiled CPU evaluator.</param>
     public IlgpuGenomeEvaluator(IFunctionSet<T> functions, IGenomeEvaluator<T>? fallback = null)
         : this(functions, fallback, null, null, null, null)
+    {
+    }
+
+    /// <summary>Creates an evaluator bound to an explicit backend policy (CUDA policies are validated before workers start).</summary>
+    public IlgpuGenomeEvaluator(IFunctionSet<T> functions, IlgpuBackendPolicy policy, IGenomeEvaluator<T>? fallback = null)
+        : this(functions, fallback, IlgpuBackendSelector.SelectFor(policy), null, null, null, null, null, null)
     {
     }
 
@@ -214,6 +221,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     public void Evaluate(Genome<T> genome, ReadOnlySpan<T> inputs, Span<T> outputs)
     {
         ArgumentNullException.ThrowIfNull(genome);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         var inputArray = inputs.ToArray();
         var outputArray = new T[outputs.Length];
         LastEvaluationUsedDevice = false;
@@ -292,7 +300,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     }
 
     private static Context CreateContext(IlgpuBackendSelection selection) =>
-        Context.Create(builder => builder.OpenCL().CPU());
+        selection.Kind == IlgpuBackendKind.CudaDevice
+            ? Context.Create(builder => builder.Cuda())
+            : Context.Create(builder => builder.OpenCL().CPU());
 
     private static Accelerator CreateAccelerator(Context context, IlgpuBackendSelection selection)
     {
@@ -306,7 +316,10 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         var device = devices[index];
         if (!MatchesSelection(device, selection))
         {
-            throw new InvalidOperationException($"dispositivo '{selection.DeviceName}' não reconhecido no novo contexto");
+            throw new InvalidOperationException(
+                $"dispositivo '{selection.DeviceName}' não reconhecido no novo contexto: " +
+                $"observado name='{device.Name}' tipo={device.AcceleratorType} mp={device.NumMultiprocessors} tpg={device.MaxNumThreadsPerGroup}; " +
+                $"esperado tipo={ExpectedAcceleratorType(selection.Kind)} mp={selection.NumMultiprocessors} tpg={selection.MaxNumThreadsPerGroup}");
         }
 
         var accelerator = device.CreateAccelerator(context);
@@ -320,8 +333,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         return accelerator;
     }
 
-    private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) =>
-        kind == IlgpuBackendKind.OpenClDevice ? AcceleratorType.OpenCL : AcceleratorType.CPU;
+    private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) => kind switch
+    {
+        IlgpuBackendKind.OpenClDevice => AcceleratorType.OpenCL,
+        IlgpuBackendKind.CudaDevice => AcceleratorType.Cuda,
+        _ => AcceleratorType.CPU,
+    };
 
     private static bool MatchesSelection(Device device, IlgpuBackendSelection selection)
     {
@@ -349,6 +366,17 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         {
             return device is CPUDevice cpu
                 && (selection.CpuNumThreads == 0 || cpu.NumThreads == selection.CpuNumThreads);
+        }
+
+        if (selection.Kind == IlgpuBackendKind.CudaDevice)
+        {
+            if (device is not CudaDevice cuda)
+            {
+                return false;
+            }
+
+            return selection.CudaPciId is null
+                || $"{cuda.PCIDomainId:X4}:{cuda.PCIBusId:X2}:{cuda.PCIDeviceId:X2}" == selection.CudaPciId;
         }
 
         return false;
@@ -730,7 +758,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
             case OpAbs: return Math.Abs(x0);
             case OpSquare: return x0 * x0;
             case OpProtectedSqrt: return double.IsNaN(x0) ? x0 : Math.Sqrt(Math.Abs(x0));
-            case OpProtectedLog: return double.IsNaN(x0) ? x0 : Math.Log(Math.Abs(x0) + 1e-12);
+            case OpProtectedLog: return double.IsNaN(x0) ? x0 : DeviceLog(Math.Abs(x0) + 1e-12);
             case OpMin:
                 if (nan) return x0 + x1;
                 if (x0 < x1) return x0;
@@ -756,6 +784,39 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     // Detecta o sinal de um zero via reinterpretação de bits (sem divisão), evitando o
     // intrínseco RcpF (1.0/x0) que o backend ILGPU/OpenCL 1.2.0 não implementa.
     private static bool IsNegativeZeroBit(double x) => BitConverter.DoubleToInt64Bits(x) < 0L;
+
+    // Logaritmo natural para x > 0 usando apenas reinterpretação de bits, multiplicação e soma.
+    // Math.Log não tem intrínseco no backend PTX/CUDA sem ILGPU.Algorithms.
+    private static double DeviceLog(double x)
+    {
+        if (double.IsPositiveInfinity(x))
+        {
+            return x;
+        }
+
+        const double Ln2 = 0.6931471805599453;
+        var bits = BitConverter.DoubleToInt64Bits(x);
+        var exponent = (int)((bits >> 52) & 0x7FFL) - 1023;
+        var m = BitConverter.Int64BitsToDouble((bits & 0x000FFFFFFFFFFFFFL) | 0x3FF0000000000000L);
+        if (m > 1.4142135623730951)
+        {
+            m *= 0.5;
+            exponent++;
+        }
+
+        // ln(m) = 2 * atanh(s), s = (m - 1) / (m + 1), |s| <= 0.1716 para m em [sqrt(1/2), sqrt(2)].
+        var s = (m - 1.0) / (m + 1.0);
+        var s2 = s * s;
+        var term = s;
+        var sum = 0.0;
+        for (var k = 1; k <= 25; k += 2)
+        {
+            sum += term / k;
+            term *= s2;
+        }
+
+        return exponent * Ln2 + 2.0 * sum;
+    }
 
     private string DescribeFallback(string? reason)
     {
