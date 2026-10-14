@@ -61,6 +61,35 @@ public sealed class IlgpuCudaBackendTests
     }
 
     [Fact]
+    public void Cuda_identity_is_stable_across_fresh_contexts_and_selects_explicitly()
+    {
+        IlgpuBackendSelection first;
+        try
+        {
+            first = IlgpuBackendSelector.SelectFor(IlgpuBackendPolicy.CudaRequired);
+        }
+        catch (InvalidOperationException)
+        {
+            // Sem CUDA válido nesta máquina: a limitação é registrada em evidence; não é aprovação CUDA.
+            return;
+        }
+
+        Assert.Equal(IlgpuBackendKind.CudaDevice, first.Kind);
+        Assert.False(string.IsNullOrWhiteSpace(first.CudaPciId));
+        Assert.NotNull(first.CudaCatalog);
+        Assert.Contains(first.CudaCatalog!, entry => entry.StartsWith("validado ", StringComparison.Ordinal));
+
+        // Segundo contexto criado do zero: a identidade física deve ser revalidada e permanecer a mesma.
+        var second = IlgpuBackendSelector.SelectCudaByPciId(first.CudaPciId!);
+        Assert.Equal(IlgpuBackendKind.CudaDevice, second.Kind);
+        Assert.Equal(first.CudaPciId, second.CudaPciId);
+        Assert.Equal(first.DeviceName, second.DeviceName);
+
+        var missing = Assert.Throws<InvalidOperationException>(() => IlgpuBackendSelector.SelectCudaByPciId("FFFF:FF:FF"));
+        Assert.Contains("ausente ou trocado", missing.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Cuda_required_matches_reference_for_double_and_int()
     {
         IlgpuBackendSelection selection;
