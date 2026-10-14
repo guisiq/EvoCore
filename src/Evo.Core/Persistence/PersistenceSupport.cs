@@ -205,6 +205,7 @@ internal sealed class OptionsDto
     public ulong Seed { get; set; }
     public string? TargetFitness { get; set; }
     public int? StagnationGenerations { get; set; }
+    public long? TimeLimitTicks { get; set; }
 }
 
 internal sealed class IndividualDto
@@ -230,4 +231,5 @@ internal sealed class CheckpointDto
     public GenomeDto? BestGenome { get; set; }
     public string? BestFitnessValue { get; set; }
     public bool BestFitnessIsValid { get; set; }
+    public long? ActiveElapsedTicks { get; set; }
 }
