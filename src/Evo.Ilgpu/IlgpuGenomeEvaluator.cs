@@ -221,6 +221,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     public void Evaluate(Genome<T> genome, ReadOnlySpan<T> inputs, Span<T> outputs)
     {
         ArgumentNullException.ThrowIfNull(genome);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         var inputArray = inputs.ToArray();
         var outputArray = new T[outputs.Length];
         LastEvaluationUsedDevice = false;
