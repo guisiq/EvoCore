@@ -29,6 +29,10 @@ public sealed class ConnectionWindowExhaustiveTests
     [InlineData(2, 3, 2, 1)]
     [InlineData(2, 4, 3, 2)]
     [InlineData(1, 4, 2, 3)]
+    [InlineData(3, 5, 3, 1)]
+    [InlineData(3, 5, 3, 4)]
+    [InlineData(2, 6, 2, 5)]
+    [InlineData(1, 6, 3, 2)]
     public void Connection_addresses_match_oracle_exhaustively(int inputCount, int nodeCount, int maxArity, int levelsBack)
     {
         var shape = new GenomeShape(inputCount, nodeCount, OutputCount: 1, maxArity, levelsBack);
