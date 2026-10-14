@@ -9,7 +9,23 @@ namespace Evo.Core.Persistence;
 public static class CheckpointFile
 {
     /// <summary>Identificador de schema do checkpoint.</summary>
-    public const string SchemaVersion = "evo-checkpoint/v1";
+    public const string SchemaVersion = "evo-checkpoint/v2";
+
+    /// <summary>Schema anterior, ainda legível; não possui tempo ativo nem TimeLimit persistidos.</summary>
+    public const string LegacySchemaVersion = "evo-checkpoint/v1";
+
+    /// <summary>Diagnóstico emitido para checkpoints legados: o tempo ativo histórico é desconhecido.</summary>
+    public const string LegacyElapsedDiagnostic =
+        "Checkpoint legado (evo-checkpoint/v1): tempo ativo de evolução desconhecido; o contador de TimeLimit começa em zero.";
+
+    /// <summary>Número máximo de tentativas de substituição atômica antes de falhar.</summary>
+    internal const int MaxReplaceAttempts = 20;
+
+    /// <summary>
+    /// Falhas injetáveis por destino (seam de teste de I/O). A função recebe o número da tentativa e devolve
+    /// a exceção a lançar, ou null para executar a substituição real.
+    /// </summary>
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Func<int, Exception?>> ReplaceFaults = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Salva o estado de forma atômica: o conteúdo é escrito em arquivo temporário no mesmo diretório,
@@ -53,6 +69,7 @@ public static class CheckpointFile
             BestGenome = state.BestGenome is null ? null : GenomeJson.ToDto(state.BestGenome, problem),
             BestFitnessValue = DoubleBits.Encode(state.BestFitness.Value),
             BestFitnessIsValid = state.BestFitness.IsValid,
+            ActiveElapsedTicks = state.ActiveElapsed.Ticks,
         };
 
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(dto, PersistenceJson.Options));
@@ -114,12 +131,22 @@ public static class CheckpointFile
         var bestGenome = dto.BestGenome is null ? null : GenomeJson.FromDto(dto.BestGenome, problem, options);
         var bestFitness = new FitnessResult(DoubleBits.Decode(dto.BestFitnessValue), dto.BestFitnessIsValid);
 
-        return new EvolutionState<T>(dto.Generation, population, fitness, bestGenome, bestFitness, dto.LastImprovement);
+        var legacy = dto.SchemaVersion == LegacySchemaVersion;
+        var activeElapsed = legacy ? TimeSpan.Zero : TimeSpan.FromTicks(dto.ActiveElapsedTicks ?? 0);
+        if (activeElapsed < TimeSpan.Zero)
+        {
+            throw GenomeJson.Invalid("tempo ativo não negativo");
+        }
+
+        return new EvolutionState<T>(
+            dto.Generation, population, fitness, bestGenome, bestFitness, dto.LastImprovement,
+            activeElapsed, ElapsedKnown: !legacy);
     }
 
     private static void ValidateHeader<T>(CheckpointDto dto, IGeneticProblem<T> problem, EvolutionOptions options)
     {
-        if (dto.SchemaVersion != SchemaVersion) throw GenomeJson.Invalid("schemaVersion de checkpoint suportado");
+        if (dto.SchemaVersion != SchemaVersion && dto.SchemaVersion != LegacySchemaVersion)
+            throw GenomeJson.Invalid("schemaVersion de checkpoint suportado");
         if (dto.ProblemId != problem.ProblemId) throw GenomeJson.Invalid("ProblemId compatível");
         if (dto.ValueTypeId != problem.Values.ValueTypeId) throw GenomeJson.Invalid("ValueTypeId compatível");
         if (dto.FunctionSetId != problem.Functions.Id) throw GenomeJson.Invalid("FunctionSet.Id compatível");
@@ -140,14 +167,17 @@ public static class CheckpointFile
             DoubleBits.SameBits(DoubleBits.Decode(o.CrossoverRate), options.CrossoverRate) &&
             DoubleBits.SameBits(DoubleBits.Decode(o.UniformCrossoverGeneProbability), options.UniformCrossoverGeneProbability) &&
             targetOk;
-        if (!compatible)
+        // Checkpoints legados não persistem TimeLimit; a compatibilidade só é verificada no schema atual.
+        var timeLimitOk = dto.SchemaVersion == LegacySchemaVersion || o.TimeLimitTicks == options.TimeLimit?.Ticks;
+        if (!compatible || !timeLimitOk)
         {
-            throw GenomeJson.Invalid("opções de evolução compatíveis com o checkpoint");
+            throw GenomeJson.Invalid("opções de evolução compatíveis com o checkpoint (incluindo TimeLimit)");
         }
     }
 
     private static OptionsDto ToOptionsDto(EvolutionOptions options) => new()
     {
+        TimeLimitTicks = options.TimeLimit?.Ticks,
         PopulationSize = options.PopulationSize,
         MaxGenerations = options.MaxGenerations,
         TournamentSize = options.TournamentSize,
@@ -165,23 +195,35 @@ public static class CheckpointFile
     /// </summary>
     private static void MoveWithRetry(string temp, string fullPath)
     {
+        var fault = ReplaceFaults.TryGetValue(fullPath, out var injected) ? injected : null;
         for (var attempt = 1; ; attempt++)
         {
             try
             {
+                var failure = fault?.Invoke(attempt);
+                if (failure is not null)
+                {
+                    throw failure;
+                }
+
                 File.Move(temp, fullPath, overwrite: true);
                 return;
             }
-            catch (UnauthorizedAccessException) when (attempt < 20)
+            catch (Exception e) when (IsTransientReplaceFailure(e) && attempt < MaxReplaceAttempts)
             {
                 Thread.Sleep(25 * attempt);
             }
-            catch (IOException) when (attempt < 20)
+            catch (Exception e) when (IsTransientReplaceFailure(e))
             {
-                Thread.Sleep(25 * attempt);
+                throw new IOException(
+                    $"Falha ao substituir o checkpoint '{fullPath}' após {attempt} tentativas: {e.Message}",
+                    e);
             }
         }
     }
+
+    private static bool IsTransientReplaceFailure(Exception e) =>
+        e is UnauthorizedAccessException or IOException;
 
     private static void WriteAtomically(string path, byte[] bytes)
     {

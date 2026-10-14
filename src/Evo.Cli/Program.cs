@@ -93,6 +93,11 @@ public static class Program
         var baseOptions = ReadConfig(Path.Combine(dir, ConfigFileName));
         var options = ParseOptions(args, baseOptions, out var outDir);
         var state = CheckpointFile.Load(checkpointPath, problem, options);
+        if (!state.ElapsedKnown)
+        {
+            Console.Error.WriteLine(CheckpointFile.LegacyElapsedDiagnostic);
+        }
+
         outDir ??= dir;
         Directory.CreateDirectory(outDir);
 

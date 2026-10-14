@@ -18,13 +18,17 @@ public sealed record EvolutionProgress(int Generation, FitnessResult BestFitness
 /// <param name="BestGenome">Melhor genoma acumulado até a geração.</param>
 /// <param name="BestFitness">Melhor fitness acumulado até a geração.</param>
 /// <param name="LastImprovement">Última geração em que o best melhorou (histórico de estagnação).</param>
+/// <param name="ActiveElapsed">Tempo ativo de evolução acumulado até esta geração (pausas entre processos excluídas).</param>
+/// <param name="ElapsedKnown">Falso quando o estado veio de checkpoint legado sem tempo ativo; <paramref name="ActiveElapsed"/> é zero.</param>
 public sealed record EvolutionState<T>(
     int Generation,
     Genome<T>[] Population,
     FitnessResult[] Fitness,
     Genome<T>? BestGenome,
     FitnessResult BestFitness,
-    int LastImprovement);
+    int LastImprovement,
+    TimeSpan ActiveElapsed = default,
+    bool ElapsedKnown = true);
 
 /// <summary>
 /// Engine evolutivo determinístico. A avaliação de indivíduos é paralela, mas cada resultado
@@ -36,15 +40,23 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
 
     private readonly Action<EvolutionProgress>? _progress;
     private readonly Action<EvolutionState<T>>? _checkpoint;
+    private readonly Func<TimeSpan>? _clock;
 
     /// <summary>
     /// Cria o engine. <paramref name="progress"/> recebe um relatório por geração completa;
     /// <paramref name="checkpoint"/> recebe o estado completo de cada geração avaliada.
     /// </summary>
     public EvolutionEngine(Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
+        : this(progress, checkpoint, null)
+    {
+    }
+
+    /// <summary>Construtor de teste: <paramref name="clock"/> substitui o relógio de parede do segmento atual.</summary>
+    internal EvolutionEngine(Action<EvolutionProgress>? progress, Action<EvolutionState<T>>? checkpoint, Func<TimeSpan>? clock)
     {
         _progress = progress;
         _checkpoint = checkpoint;
+        _clock = clock;
     }
 
     /// <inheritdoc />
@@ -78,7 +90,9 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
 
         var values = problem.Values;
         var operators = new EvolutionOperators<T>(problem);
-        var clock = Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
+        var baseElapsed = resume?.ActiveElapsed ?? TimeSpan.Zero;
+        TimeSpan ActiveElapsed() => baseElapsed + (_clock?.Invoke() ?? stopwatch.Elapsed);
         var n = options.PopulationSize;
 
         var workers = options.WorkerCount > 0 ? options.WorkerCount : Environment.ProcessorCount;
@@ -135,9 +149,10 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
             }
 
             _progress?.Invoke(new EvolutionProgress(generation, bestFitness, digest));
-            _checkpoint?.Invoke(new EvolutionState<T>(generation, population, fitness, bestGenome, bestFitness, lastImprovement));
+            var elapsed = ActiveElapsed();
+            _checkpoint?.Invoke(new EvolutionState<T>(generation, population, fitness, bestGenome, bestFitness, lastImprovement, elapsed));
 
-            var reason = CheckTermination(options, generation, lastImprovement, bestFitness, clock, cancellationToken);
+            var reason = CheckTermination(options, generation, lastImprovement, bestFitness, elapsed, cancellationToken);
             if (reason is { } termination)
             {
                 return new EvolutionResult<T>(bestGenome!.Clone(values), bestFitness, generation, termination);
@@ -177,7 +192,7 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
         int generation,
         int lastImprovement,
         FitnessResult bestFitness,
-        Stopwatch clock,
+        TimeSpan elapsed,
         CancellationToken cancellationToken)
     {
         if (options.TargetFitness is { } target && bestFitness.IsValid && bestFitness.Value >= target)
@@ -200,7 +215,7 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
             return TerminationReason.Cancellation;
         }
 
-        if (options.TimeLimit is { } limit && clock.Elapsed >= limit)
+        if (options.TimeLimit is { } limit && elapsed >= limit)
         {
             return TerminationReason.TimeLimit;
         }
