@@ -76,6 +76,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     private readonly Action<Action>? _launchInvoker;
     private readonly Action<Accelerator>? _synchronizeInvoker;
     private readonly Action<MemoryBuffer[]>? _bufferObserver;
+    private readonly Action? _beforeKernelLoad;
     private Context? _context;
     private Accelerator? _accelerator;
     private string? _unavailableReason;
@@ -107,7 +108,8 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         Action? beforeKernelExecution,
         Action<Action>? launchInvoker = null,
         Action<Accelerator>? synchronizeInvoker = null,
-        Action<MemoryBuffer[]>? bufferObserver = null)
+        Action<MemoryBuffer[]>? bufferObserver = null,
+        Action? beforeKernelLoad = null)
     {
         ArgumentNullException.ThrowIfNull(functions);
         WorkerId = System.Threading.Interlocked.Increment(ref _workerCounter) - 1;
@@ -127,6 +129,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         _launchInvoker = launchInvoker;
         _synchronizeInvoker = synchronizeInvoker;
         _bufferObserver = bufferObserver;
+        _beforeKernelLoad = beforeKernelLoad;
         LastFallbackReason = _selection.FallbackReason;
         Backend = _selection.BackendName;
         DeviceName = _selection.DiagnosticDeviceName;
@@ -289,6 +292,7 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         var context = (contextFactory ?? CreateContext)(_selection);
         _context = context;
         _accelerator = (acceleratorFactory ?? CreateAccelerator)(context, _selection);
+        _beforeKernelLoad?.Invoke();
         if (typeof(T) == typeof(double) || typeof(T) == typeof(double[]))
         {
             _doubleKernel = _accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<double>, ArrayView<double>, ArrayView<int>, ArrayView<double>, ArrayView<int>, int, int>(DoubleKernel);

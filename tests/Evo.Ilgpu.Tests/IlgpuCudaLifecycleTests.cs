@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using ILGPU.Runtime;
 using Evo.Core;
 using Evo.Core.Functions;
@@ -8,39 +10,41 @@ using Xunit;
 namespace Evo.Ilgpu.Tests;
 
 /// <summary>
-/// R1-4 (015-v3-cuda-backend): ciclo de vida real na GTX 1650 — descarte, falhas injetadas pós-seleção
-/// (launch/sync), ausência de mistura entre instâncias ("workers") e determinismo com 1/2/N instâncias.
-/// Sem CUDA válido nesta máquina, cada teste registra a limitação e retorna sem aprovar CUDA.
+/// R1-4 (015-v3-cuda-backend): ciclo de vida real em CUDA — descarte, falhas injetadas pós-seleção
+/// (launch/sync), ausência de mistura entre instâncias concorrentes ("workers") e determinismo bit a bit
+/// com 1/2/N instâncias simultâneas. Sem CUDA válido, cada teste é reportado como ignorado (skip dinâmico
+/// visível), nunca como aprovado.
 /// </summary>
 public sealed class IlgpuCudaLifecycleTests
 {
     private static GenomeShape Shape => new(InputCount: 2, NodeCount: 1, OutputCount: 1, MaxArity: 2, LevelsBack: 1);
 
-    private static bool TryCudaSelection(out IlgpuBackendSelection selection)
+    private static IlgpuBackendSelection SelectCudaOrSkip()
     {
         try
         {
-            selection = IlgpuBackendSelector.SelectFor(IlgpuBackendPolicy.CudaRequired);
-            return true;
+            return IlgpuBackendSelector.SelectFor(IlgpuBackendPolicy.CudaRequired);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            selection = default!;
-            return false;
+            throw new DynamicSkipException("CUDA indisponível nesta máquina: " + ex.Message);
         }
     }
 
-    [Fact]
+    private static Genome<double> DoubleGenome(string functionPart)
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        return Genome<double>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, functionPart)], [0, 1],
+            [0.0], [2], DoubleValueSemantics.Instance, functions);
+    }
+
+    [OptionalFact]
     public void Dispose_releases_cuda_accelerator_and_context_and_is_idempotent()
     {
-        if (!TryCudaSelection(out var selection))
-        {
-            return;
-        }
+        var selection = SelectCudaOrSkip();
 
         var functions = StandardDoubleFunctionSet.Instance;
-        var genome = Genome<double>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
-            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        var genome = DoubleGenome("add");
 
         var evaluator = new IlgpuGenomeEvaluator<double>(
             functions, fallback: null, selectionOverride: selection, contextFactory: null, acceleratorFactory: null,
@@ -64,17 +68,13 @@ public sealed class IlgpuCudaLifecycleTests
         Assert.ThrowsAny<Exception>(() => evaluator.Evaluate(genome, [1.0, 2.0], new double[1]));
     }
 
-    [Fact]
+    [OptionalFact]
     public void Launch_failure_after_cuda_selection_is_explicit_and_disposes_buffers_without_fallback()
     {
-        if (!TryCudaSelection(out var selection))
-        {
-            return;
-        }
+        var selection = SelectCudaOrSkip();
 
         var functions = StandardDoubleFunctionSet.Instance;
-        var genome = Genome<double>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
-            [0.0], [2], DoubleValueSemantics.Instance, functions);
+        var genome = DoubleGenome("add");
         MemoryBuffer[]? observedBuffers = null;
         var forcedFailure = new InvalidOperationException("falha-lancamento-cuda-double");
         using var evaluator = new IlgpuGenomeEvaluator<double>(
@@ -96,13 +96,10 @@ public sealed class IlgpuCudaLifecycleTests
         Assert.NotEqual("CPU fallback", evaluator.Backend);
     }
 
-    [Fact]
+    [OptionalFact]
     public void Sync_failure_after_cuda_launch_is_explicit_and_disposes_buffers_without_fallback()
     {
-        if (!TryCudaSelection(out var selection))
-        {
-            return;
-        }
+        var selection = SelectCudaOrSkip();
 
         var functions = StandardInt32FunctionSet.Instance;
         var genome = Genome<int>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
@@ -127,70 +124,200 @@ public sealed class IlgpuCudaLifecycleTests
         Assert.Equal("ILGPU/CUDA", evaluator.Backend);
     }
 
-    /// <summary>
-    /// Uma falha pós-seleção em uma instância ("worker") não deve contaminar outra instância independente:
-    /// cada <see cref="IlgpuGenomeEvaluator{T}"/> mantém seu próprio contexto/acelerador CUDA.
-    /// </summary>
-    [Fact]
-    public void Failure_in_one_worker_instance_does_not_contaminate_another_independent_cuda_instance()
+    [OptionalFact]
+    public void Cancellation_after_cuda_selection_is_explicit_and_disposes_buffers_without_fallback()
     {
-        if (!TryCudaSelection(out var selectionA) || !TryCudaSelection(out var selectionB))
-        {
-            return;
-        }
+        var selection = SelectCudaOrSkip();
 
         var functions = StandardDoubleFunctionSet.Instance;
-        var genome = Genome<double>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, "add")], [0, 1],
-            [0.0], [2], DoubleValueSemantics.Instance, functions);
-
-        using var failingWorker = new IlgpuGenomeEvaluator<double>(
+        var genome = DoubleGenome("add");
+        MemoryBuffer[]? observedBuffers = null;
+        using var cancellation = new CancellationTokenSource();
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
             functions,
             fallback: null,
-            selectionOverride: selectionA,
+            selectionOverride: selection,
             contextFactory: null,
             acceleratorFactory: null,
-            beforeKernelExecution: null,
-            launchInvoker: _ => throw new InvalidOperationException("falha-worker-a"));
-        Assert.Throws<InvalidOperationException>(() => failingWorker.Evaluate(genome, [1.0, 2.0], new double[1]));
+            beforeKernelExecution: () =>
+            {
+                cancellation.Cancel();
+                cancellation.Token.ThrowIfCancellationRequested();
+            },
+            launchInvoker: null,
+            synchronizeInvoker: null,
+            bufferObserver: buffers => observedBuffers = buffers.ToArray());
 
-        using var healthyWorker = new IlgpuGenomeEvaluator<double>(functions, IlgpuBackendPolicy.CudaRequired);
-        var output = new double[1];
-        healthyWorker.Evaluate(genome, [1.0, 2.0], output);
-        Assert.True(healthyWorker.LastEvaluationUsedDevice);
-        Assert.Equal(3.0, output[0]);
+        Assert.Throws<OperationCanceledException>(() => evaluator.Evaluate(genome, [1.0, 2.0], new double[1]));
+        Assert.NotNull(observedBuffers);
+        Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+        Assert.Equal("ILGPU/CUDA", evaluator.Backend);
+        Assert.NotEqual("CPU fallback", evaluator.Backend);
     }
 
-    /// <summary>Determinismo: 1, 2 e N instâncias CUDA independentes produzem a mesma saída para o mesmo genoma.</summary>
-    [Fact]
-    public void Deterministic_output_across_one_two_and_n_independent_cuda_worker_instances()
+    /// <summary>
+    /// Falha de compilação do kernel CUDA após a seleção: a construção falha explicitamente, preservando a causa
+    /// original, sem fallback para CPU e sem deixar acelerador/contexto ativos. A falha compartilhada registrada
+    /// para a seleção é limpa ao final para não vazar para outros testes.
+    /// </summary>
+    [OptionalFact]
+    public void Kernel_compilation_failure_after_cuda_selection_is_explicit_without_fallback()
     {
-        if (!TryCudaSelection(out _))
+        var selection = SelectCudaOrSkip();
+        var functions = StandardDoubleFunctionSet.Instance;
+        var forcedFailure = new InvalidOperationException("falha-compilacao-kernel-cuda-double");
+        try
         {
-            return;
+            var error = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: null,
+                synchronizeInvoker: null,
+                bufferObserver: null,
+                beforeKernelLoad: () => throw forcedFailure));
+            Assert.Contains(forcedFailure.Message, error.Message);
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
+    }
+
+    /// <summary>
+    /// Workers concorrentes (metade com falha injetada pós-seleção, metade saudável) sobre dois genomas e duas
+    /// entradas: a falha de um worker não pode contaminar os demais, e os saudáveis devem coincidir bit a bit
+    /// com a linha de base de uma única instância.
+    /// </summary>
+    [OptionalFact]
+    public void Failure_in_one_worker_instance_does_not_contaminate_concurrent_cuda_instances()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genomes = new[] { DoubleGenome("add"), DoubleGenome("mul") };
+        var inputSets = new[] { new[] { 1.75, -3.5 }, new[] { 0.5, 1e-3 } };
+        var workerCount = Math.Max(4, Environment.ProcessorCount);
+
+        var baseline = new double[genomes.Length, inputSets.Length];
+        using (var reference = new IlgpuGenomeEvaluator<double>(functions, IlgpuBackendPolicy.CudaRequired))
+        {
+            for (var g = 0; g < genomes.Length; g++)
+            {
+                for (var i = 0; i < inputSets.Length; i++)
+                {
+                    var output = new double[1];
+                    reference.Evaluate(genomes[g], inputSets[i], output);
+                    Assert.True(reference.LastEvaluationUsedDevice);
+                    baseline[g, i] = output[0];
+                }
+            }
         }
 
-        var functions = StandardDoubleFunctionSet.Instance;
-        var genome = Genome<double>.FromGenes(Shape, [IlgpuTestHelpers.FindFunctionId(functions, "mul")], [0, 1],
-            [0.0], [2], DoubleValueSemantics.Instance, functions);
-        var inputs = new[] { 1.75, -3.5 };
-
-        foreach (var workerCount in new[] { 1, 2, 4 })
+        var selections = new IlgpuBackendSelection[workerCount];
+        for (var w = 0; w < workerCount; w++)
         {
-            var results = new double[workerCount];
-            for (var w = 0; w < workerCount; w++)
+            selections[w] = SelectCudaOrSkip();
+        }
+
+        var failedExplicitly = new bool[workerCount];
+        var mismatches = new int[workerCount];
+        Parallel.For(0, workerCount, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, w =>
+        {
+            var failing = w % 2 == 0;
+            var evaluator = failing
+                ? new IlgpuGenomeEvaluator<double>(
+                    functions, fallback: null, selectionOverride: selections[w], contextFactory: null,
+                    acceleratorFactory: null, beforeKernelExecution: null,
+                    launchInvoker: _ => throw new InvalidOperationException("falha-worker-" + w))
+                : new IlgpuGenomeEvaluator<double>(functions, IlgpuBackendPolicy.CudaRequired);
+            using (evaluator)
+            {
+                for (var g = 0; g < genomes.Length; g++)
+                {
+                    for (var i = 0; i < inputSets.Length; i++)
+                    {
+                        var output = new double[1];
+                        if (failing)
+                        {
+                            var error = Assert.Throws<InvalidOperationException>(() => evaluator.Evaluate(genomes[g], inputSets[i], output));
+                            Assert.Equal("falha-worker-" + w, error.Message);
+                            failedExplicitly[w] = true;
+                            continue;
+                        }
+
+                        evaluator.Evaluate(genomes[g], inputSets[i], output);
+                        if (!evaluator.LastEvaluationUsedDevice
+                            || BitConverter.DoubleToInt64Bits(output[0]) != BitConverter.DoubleToInt64Bits(baseline[g, i]))
+                        {
+                            mismatches[w]++;
+                        }
+                    }
+                }
+            }
+        });
+
+        for (var w = 0; w < workerCount; w++)
+        {
+            Assert.Equal(w % 2 == 0, failedExplicitly[w]);
+            Assert.Equal(0, mismatches[w]);
+        }
+    }
+
+    /// <summary>
+    /// Determinismo: 1, 2 e N instâncias CUDA independentes, executando simultaneamente, produzem a mesma saída
+    /// bit a bit para cada genoma e entrada da linha de base de uma única instância.
+    /// </summary>
+    [OptionalFact]
+    public void Deterministic_output_across_one_two_and_n_concurrent_cuda_worker_instances()
+    {
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genomes = new[] { DoubleGenome("add"), DoubleGenome("mul") };
+        var inputSets = new[] { new[] { 1.75, -3.5 }, new[] { 0.5, 1e-3 } };
+        var counts = new[] { 1, 2, 4, Math.Max(4, Environment.ProcessorCount) };
+
+        var baseline = new long[genomes.Length, inputSets.Length];
+        using (var reference = new IlgpuGenomeEvaluator<double>(functions, IlgpuBackendPolicy.CudaRequired))
+        {
+            for (var g = 0; g < genomes.Length; g++)
+            {
+                for (var i = 0; i < inputSets.Length; i++)
+                {
+                    var output = new double[1];
+                    reference.Evaluate(genomes[g], inputSets[i], output);
+                    Assert.True(reference.LastEvaluationUsedDevice);
+                    baseline[g, i] = BitConverter.DoubleToInt64Bits(output[0]);
+                }
+            }
+        }
+
+        foreach (var workerCount in counts)
+        {
+            var mismatches = new int[workerCount];
+            var deviceUsed = new bool[workerCount];
+            Parallel.For(0, workerCount, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, w =>
             {
                 using var evaluator = new IlgpuGenomeEvaluator<double>(functions, IlgpuBackendPolicy.CudaRequired);
-                var output = new double[1];
-                evaluator.Evaluate(genome, inputs, output);
-                Assert.True(evaluator.LastEvaluationUsedDevice);
-                results[w] = output[0];
-            }
+                for (var g = 0; g < genomes.Length; g++)
+                {
+                    for (var i = 0; i < inputSets.Length; i++)
+                    {
+                        var output = new double[1];
+                        evaluator.Evaluate(genomes[g], inputSets[i], output);
+                        deviceUsed[w] = evaluator.LastEvaluationUsedDevice;
+                        if (BitConverter.DoubleToInt64Bits(output[0]) != baseline[g, i])
+                        {
+                            mismatches[w]++;
+                        }
+                    }
+                }
+            });
 
-            for (var w = 1; w < workerCount; w++)
+            for (var w = 0; w < workerCount; w++)
             {
-                Assert.Equal(
-                    BitConverter.DoubleToInt64Bits(results[0]),
-                    BitConverter.DoubleToInt64Bits(results[w]));
+                Assert.True(deviceUsed[w], $"worker {w} de {workerCount} não usou o dispositivo CUDA");
+                Assert.Equal(0, mismatches[w]);
             }
         }
     }
