@@ -1,6 +1,7 @@
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
+using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.OpenCL;
 using Evo.Core;
 using Evo.Core.Compiled;
@@ -88,6 +89,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     /// <param name="fallback">Evaluator used when the device cannot run the call; defaults to the compiled CPU evaluator.</param>
     public IlgpuGenomeEvaluator(IFunctionSet<T> functions, IGenomeEvaluator<T>? fallback = null)
         : this(functions, fallback, null, null, null, null)
+    {
+    }
+
+    /// <summary>Creates an evaluator bound to an explicit backend policy (CUDA policies are validated before workers start).</summary>
+    public IlgpuGenomeEvaluator(IFunctionSet<T> functions, IlgpuBackendPolicy policy, IGenomeEvaluator<T>? fallback = null)
+        : this(functions, fallback, IlgpuBackendSelector.SelectFor(policy), null, null, null, null, null, null)
     {
     }
 
@@ -292,7 +299,9 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
     }
 
     private static Context CreateContext(IlgpuBackendSelection selection) =>
-        Context.Create(builder => builder.OpenCL().CPU());
+        selection.Kind == IlgpuBackendKind.CudaDevice
+            ? Context.Create(builder => builder.Cuda())
+            : Context.Create(builder => builder.OpenCL().CPU());
 
     private static Accelerator CreateAccelerator(Context context, IlgpuBackendSelection selection)
     {
@@ -320,8 +329,12 @@ public sealed class IlgpuGenomeEvaluator<T> : IGenomeEvaluator<T>, IDisposable
         return accelerator;
     }
 
-    private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) =>
-        kind == IlgpuBackendKind.OpenClDevice ? AcceleratorType.OpenCL : AcceleratorType.CPU;
+    private static AcceleratorType ExpectedAcceleratorType(IlgpuBackendKind kind) => kind switch
+    {
+        IlgpuBackendKind.OpenClDevice => AcceleratorType.OpenCL,
+        IlgpuBackendKind.CudaDevice => AcceleratorType.Cuda,
+        _ => AcceleratorType.CPU,
+    };
 
     private static bool MatchesSelection(Device device, IlgpuBackendSelection selection)
     {

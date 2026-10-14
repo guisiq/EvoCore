@@ -1,15 +1,32 @@
 using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.CPU;
+using ILGPU.Runtime.Cuda;
 using ILGPU.Runtime.OpenCL;
 
 namespace Evo.Ilgpu;
+
+/// <summary>Explicit per-run backend policy. <c>LegacyOpenCl</c> keeps the v2 OpenCL/CPU selection.</summary>
+public enum IlgpuBackendPolicy
+{
+    /// <summary>v2 behavior: OpenCL device, then ILGPU CPU, then CPU fallback.</summary>
+    LegacyOpenCl,
+
+    /// <summary>CUDA first; on failure falls back to the legacy selection with the cause recorded.</summary>
+    CudaPreferred,
+
+    /// <summary>Only a validated CUDA device; fails explicitly otherwise.</summary>
+    CudaRequired,
+}
 
 /// <summary>Kind of accelerator effectively selected for an ILGPU evaluation.</summary>
 public enum IlgpuBackendKind
 {
     /// <summary>ILGPU kernels executed on an OpenCL device.</summary>
     OpenClDevice,
+
+    /// <summary>ILGPU kernels executed on a NVIDIA device through the ILGPU CUDA backend.</summary>
+    CudaDevice,
 
     /// <summary>ILGPU kernels executed on the ILGPU CPU accelerator (no OpenCL device usable).</summary>
     IlgpuCpu,
@@ -43,12 +60,14 @@ public sealed record IlgpuBackendSelection(
     int CpuNumThreads = 0,
     string? PlatformName = null,
     string? PlatformId = null,
-    string? OpenClDeviceId = null)
+    string? OpenClDeviceId = null,
+    string? CudaPciId = null)
 {
     /// <summary>Human-readable backend name for diagnostics.</summary>
     public string BackendName => Kind switch
     {
         IlgpuBackendKind.OpenClDevice => "ILGPU/OpenCL",
+        IlgpuBackendKind.CudaDevice => "ILGPU/CUDA",
         IlgpuBackendKind.IlgpuCpu => "ILGPU/CPU",
         _ => "CPU fallback",
     };
@@ -118,6 +137,95 @@ public static class IlgpuBackendSelector
         IEnumerable<IlgpuBackendSelection> cpuCandidates,
         Func<IlgpuBackendSelection, Exception?> validator) =>
         SelectCandidate(openClCandidates.ToArray(), cpuCandidates.ToArray(), validator);
+
+    /// <summary>
+    /// Resolves the selection for an explicit policy. CUDA candidates are validated by loading the required
+    /// kernels before being chosen; <c>CudaRequired</c> throws when no CUDA device validates.
+    /// </summary>
+    public static IlgpuBackendSelection SelectFor(IlgpuBackendPolicy policy)
+    {
+        if (policy == IlgpuBackendPolicy.LegacyOpenCl)
+        {
+            return Selection;
+        }
+
+        var cuda = ProbeCuda();
+        if (cuda.Kind == IlgpuBackendKind.CudaDevice)
+        {
+            return cuda;
+        }
+
+        if (policy == IlgpuBackendPolicy.CudaRequired)
+        {
+            throw new InvalidOperationException($"CUDA obrigatório indisponível: {cuda.FallbackReason}");
+        }
+
+        return Selection with { FallbackReason = $"CUDA indisponível ({cuda.FallbackReason}); usando seleção legada" };
+    }
+
+    private static IlgpuBackendSelection ProbeCuda()
+    {
+        try
+        {
+            using var context = Context.Create(builder => builder.Cuda());
+            var devices = context.Devices.ToArray();
+            var candidates = devices
+                .Select((device, index) => (device, index))
+                .Where(item => item.device.AcceleratorType == AcceleratorType.Cuda)
+                .Select(item => CreateCudaCandidate(item.device, item.index))
+                .OrderBy(candidate => candidate.CudaPciId, StringComparer.Ordinal)
+                .ToArray();
+            if (candidates.Length == 0)
+            {
+                return NoCuda("nenhum dispositivo CUDA encontrado pelo runtime ILGPU");
+            }
+
+            string? lastError = null;
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    using var accelerator = context.Devices[candidate.DeviceIndex].CreateAccelerator(context);
+                    var error = ProbeRequiredKernelSupport(accelerator);
+                    if (error is null)
+                    {
+                        return candidate;
+                    }
+
+                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {error.GetType().Name}";
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {ex.GetType().Name}";
+                }
+            }
+
+            return NoCuda(lastError ?? "nenhum dispositivo CUDA utilizável");
+        }
+        catch (Exception ex)
+        {
+            return NoCuda($"falha de inicialização do runtime CUDA: {ex.GetType().Name}");
+        }
+    }
+
+    private static IlgpuBackendSelection NoCuda(string reason) =>
+        new(IlgpuBackendKind.CpuFallback, -1, "nenhum", reason);
+
+    private static IlgpuBackendSelection CreateCudaCandidate(Device device, int index)
+    {
+        var cuda = (CudaDevice)device;
+        return new IlgpuBackendSelection(
+            IlgpuBackendKind.CudaDevice,
+            index,
+            device.Name,
+            null,
+            device.WarpSize,
+            device.MaxNumThreads,
+            device.NumMultiprocessors,
+            device.MaxNumThreadsPerGroup,
+            CpuNumThreads: 0,
+            CudaPciId: $"{cuda.PCIDomainId:X4}:{cuda.PCIBusId:X2}:{cuda.PCIDeviceId:X2}");
+    }
 
     private static IlgpuBackendSelection Probe() =>
         Probe(
