@@ -130,7 +130,8 @@ public static class Program
 
         var problem = new SymbolicRegressionProblem();
         var evaluator = new ReferenceGenomeEvaluator<double>(problem.Functions);
-        var rows = new StringBuilder("seed,trainingMse,validationMse,generation,terminationReason,elapsedSeconds\n");
+        var rows = new StringBuilder("seed,trainingMse,validationMse,generation,terminationReason,elapsedSeconds,workers\n");
+        var effectiveWorkers = baseOptions.WorkerCount > 0 ? baseOptions.WorkerCount : Environment.ProcessorCount;
         var passing = 0;
         for (ulong seed = 0; seed < 30; seed++)
         {
@@ -146,7 +147,7 @@ public static class Program
                 passing++;
             }
 
-            rows.Append(CultureInfo.InvariantCulture, $"{seed},{training:R},{validation:R},{result.GenerationsRun},{result.Termination},{sw.Elapsed.TotalSeconds:F3}\n");
+            rows.Append(CultureInfo.InvariantCulture, $"{seed},{training:R},{validation:R},{result.GenerationsRun},{result.Termination},{sw.Elapsed.TotalSeconds:F3},{effectiveWorkers}\n");
             Console.WriteLine($"seed={seed} validationMSE={validation:E3} generation={result.GenerationsRun} termination={result.Termination}");
         }
 
