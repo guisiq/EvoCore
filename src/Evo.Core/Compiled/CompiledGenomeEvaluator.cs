@@ -72,6 +72,9 @@ public sealed class CompiledGenomeEvaluator<T> : IGenomeEvaluator<T>
     private readonly CompiledExecutionCounters? _counters;
     private long _hits;
     private long _misses;
+    private readonly object _lastGate = new();
+    private Genome<T>? _lastGenome;
+    private CompiledGenomePlan<T>? _lastPlan;
 
     /// <summary>Creates a compiled evaluator.</summary>
     /// <param name="functions">Function set used to resolve function genes.</param>
@@ -126,6 +129,19 @@ public sealed class CompiledGenomeEvaluator<T> : IGenomeEvaluator<T>
     /// <summary>Returns the cached plan of <paramref name="genome"/>, compiling it on a miss.</summary>
     internal CompiledGenomePlan<T> GetPlan(Genome<T> genome)
     {
+        // Reference fast path: repeated warmed calls with the same genome instance (the common
+        // case of evaluating one genome over many fitness cases) skip the fingerprint/base64/key
+        // allocations below entirely. A genome instance is immutable once built, so its fingerprint
+        // cannot change while the reference is unchanged; this never affects which plan is returned.
+        lock (_lastGate)
+        {
+            if (ReferenceEquals(genome, _lastGenome) && _lastPlan is not null)
+            {
+                Interlocked.Increment(ref _hits);
+                return _lastPlan;
+            }
+        }
+
         var fingerprint = genome.ComputePhenotypeFingerprint(_functions, _values);
         var key = $"{Convert.ToBase64String(fingerprint)}|{_functions.Id}|{_values.ValueTypeId}";
         var plan = _cache.GetOrAdd(key, () => CompiledGenomePlan<T>.Compile(genome, _functions, _values), out var hit);
@@ -136,6 +152,12 @@ public sealed class CompiledGenomeEvaluator<T> : IGenomeEvaluator<T>
         else
         {
             Interlocked.Increment(ref _misses);
+        }
+
+        lock (_lastGate)
+        {
+            _lastGenome = genome;
+            _lastPlan = plan;
         }
 
         return plan;
