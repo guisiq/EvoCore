@@ -222,7 +222,7 @@ public static class IlgpuBackendSelector
                         return candidate with { CudaCatalog = catalog.ToArray() };
                     }
 
-                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {error.GetType().Name}";
+                    lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {error.GetType().Name}: {error.Message}{InnerChain(error)}";
                     catalog.Add($"rejeitado {candidate.DeviceName}: {error.GetType().Name}");
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -239,6 +239,10 @@ public static class IlgpuBackendSelector
             return NoCuda($"falha de inicialização do runtime CUDA: {ex.GetType().Name}");
         }
     }
+
+    private static string InnerChain(Exception ex) => ex.InnerException is null
+        ? string.Empty
+        : $" inner={ex.InnerException.GetType().Name}: {ex.InnerException.Message}{InnerChain(ex.InnerException)}";
 
     private static IlgpuBackendSelection NoCuda(string reason) =>
         new(IlgpuBackendKind.CpuFallback, -1, "nenhum", reason);
