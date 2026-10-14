@@ -396,6 +396,43 @@ public static class IlgpuBackendSelector
                 IlgpuGenomeEvaluator<double>.DoubleKernel);
             accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, ArrayView<int>, int, int>(
                 IlgpuGenomeEvaluator<int>.IntKernel);
+            return ExecuteProbe(accelerator);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return ex;
+        }
+    }
+
+    /// <summary>
+    /// Executes a small proof on the accelerator for each supported value kind (<c>double</c>, <c>int</c>,
+    /// <c>double[]</c>, <c>int[]</c>) and compares the results with the CPU reference. Any mismatch or
+    /// runtime error rejects the device before it is selected.
+    /// </summary>
+    private static Exception? ExecuteProbe(Accelerator accelerator)
+    {
+        const int Length = 12;
+        var doubleInput = Enumerable.Range(0, Length).Select(i => i * 0.5 - 2.0).ToArray();
+        var intInput = Enumerable.Range(0, Length).Select(i => i * 3 - 7).ToArray();
+        var doubleArrayInput = Enumerable.Range(0, Length * 3).Select(i => i * 0.25 - 1.0).ToArray();
+        var intArrayInput = Enumerable.Range(0, Length * 3).Select(i => i * 2 - 5).ToArray();
+
+        try
+        {
+            var doubleKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<double>>(ProbeDoubleKernel);
+            var intKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<int>>(ProbeIntKernel);
+            var doubleArrayKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<double>>(ProbeDoubleKernel);
+            var intArrayKernel = accelerator.LoadAutoGroupedKernel<Index1D, ArrayView<int>>(ProbeIntKernel);
+
+            var doubleOk = RunDoubleProbe(accelerator, doubleKernel, doubleInput);
+            var intOk = RunIntProbe(accelerator, intKernel, intInput);
+            var doubleArrayOk = RunDoubleProbe(accelerator, doubleArrayKernel, doubleArrayInput);
+            var intArrayOk = RunIntProbe(accelerator, intArrayKernel, intArrayInput);
+            if (!doubleOk || !intOk || !doubleArrayOk || !intArrayOk)
+            {
+                return new InvalidOperationException("probe de execução divergente da referência CPU");
+            }
+
             return null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -403,4 +440,48 @@ public static class IlgpuBackendSelector
             return ex;
         }
     }
+
+    private static bool RunDoubleProbe(Accelerator accelerator, Action<AcceleratorStream, Index1D, ArrayView<double>> kernel, double[] input)
+    {
+        using var buffer = accelerator.Allocate1D<double>(input.Length);
+        buffer.CopyFromCPU(input);
+        kernel(accelerator.DefaultStream, input.Length, buffer.View);
+        accelerator.Synchronize();
+        var output = new double[input.Length];
+        buffer.CopyToCPU(output);
+        for (var i = 0; i < input.Length; i++)
+        {
+            if (output[i] != input[i] * 2.0 + 1.0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool RunIntProbe(Accelerator accelerator, Action<AcceleratorStream, Index1D, ArrayView<int>> kernel, int[] input)
+    {
+        using var buffer = accelerator.Allocate1D<int>(input.Length);
+        buffer.CopyFromCPU(input);
+        kernel(accelerator.DefaultStream, input.Length, buffer.View);
+        accelerator.Synchronize();
+        var output = new int[input.Length];
+        buffer.CopyToCPU(output);
+        for (var i = 0; i < input.Length; i++)
+        {
+            if (output[i] != input[i] * 2 + 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ProbeDoubleKernel(Index1D index, ArrayView<double> data) =>
+        data[index] = data[index] * 2.0 + 1.0;
+
+    private static void ProbeIntKernel(Index1D index, ArrayView<int> data) =>
+        data[index] = data[index] * 2 + 1;
 }
