@@ -48,6 +48,8 @@ public enum IlgpuBackendKind
 /// <param name="PlatformName">OpenCL platform name, when applicable.</param>
 /// <param name="PlatformId">OpenCL platform identity token, when applicable.</param>
 /// <param name="OpenClDeviceId">OpenCL device identity token, when applicable.</param>
+/// <param name="CudaPciId">PCI identity (domain:bus:device) of the CUDA device, when applicable.</param>
+/// <param name="CudaCatalog">Observable CUDA catalog entries (descoberto/validado/rejeitado) recorded during the probe.</param>
 public sealed record IlgpuBackendSelection(
     IlgpuBackendKind Kind,
     int DeviceIndex,
@@ -61,7 +63,8 @@ public sealed record IlgpuBackendSelection(
     string? PlatformName = null,
     string? PlatformId = null,
     string? OpenClDeviceId = null,
-    string? CudaPciId = null)
+    string? CudaPciId = null,
+    IReadOnlyList<string>? CudaCatalog = null)
 {
     /// <summary>Human-readable backend name for diagnostics.</summary>
     public string BackendName => Kind switch
@@ -180,6 +183,13 @@ public static class IlgpuBackendSelector
                 return NoCuda("nenhum dispositivo CUDA encontrado pelo runtime ILGPU");
             }
 
+            // Catálogo observável: cada candidato CUDA descoberto recebe estado (descoberto -> validado) e motivo de rejeição.
+            var catalog = new List<string>();
+            foreach (var candidate in candidates)
+            {
+                catalog.Add($"descoberto {candidate.DeviceName} pci={candidate.CudaPciId}");
+            }
+
             string? lastError = null;
             foreach (var candidate in candidates)
             {
@@ -189,18 +199,21 @@ public static class IlgpuBackendSelector
                     var error = ProbeRequiredKernelSupport(accelerator);
                     if (error is null)
                     {
-                        return candidate;
+                        catalog.Add($"validado {candidate.DeviceName} pci={candidate.CudaPciId}");
+                        return candidate with { CudaCatalog = catalog.ToArray() };
                     }
 
                     lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {error.GetType().Name}";
+                    catalog.Add($"rejeitado {candidate.DeviceName}: {error.GetType().Name}");
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     lastError = $"dispositivo CUDA '{candidate.DeviceName}' não utilizável: {ex.GetType().Name}";
+                    catalog.Add($"rejeitado {candidate.DeviceName}: {ex.GetType().Name}");
                 }
             }
 
-            return NoCuda(lastError ?? "nenhum dispositivo CUDA utilizável");
+            return NoCuda(lastError ?? "nenhum dispositivo CUDA utilizável") with { CudaCatalog = catalog.ToArray() };
         }
         catch (Exception ex)
         {
