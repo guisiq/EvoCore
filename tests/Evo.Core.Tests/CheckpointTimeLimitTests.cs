@@ -225,4 +225,59 @@ public sealed class CheckpointTimeLimitTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public void Resume_cold_cache_evaluation_overhead_is_measured_against_continuous_run()
+    {
+        const int total = 8;
+        const int checkpointGeneration = 3;
+        var options = Options(total);
+
+        var continuousCount = 0;
+        var evaluationsBeforeCheckpoint = -1;
+        EvolutionState<double>? captured = null;
+        var continuousProblem = new EvolutionTestProblem<double>(
+            Shape,
+            StandardDoubleFunctionSet.Instance,
+            new DoubleValueSemantics(),
+            new DoubleParameterStrategy(),
+            () => new QuadraticFitness(onEvaluate: () => continuousCount++));
+        var continuous = new EvolutionEngine<double>(checkpoint: s =>
+        {
+            if (s.Generation == checkpointGeneration)
+            {
+                captured = s;
+                evaluationsBeforeCheckpoint = continuousCount;
+            }
+        }).Run(continuousProblem, options);
+        Assert.NotNull(captured);
+
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "checkpoint.json");
+            CheckpointFile.Save(path, continuousProblem, options, captured!);
+            var loaded = CheckpointFile.Load(path, continuousProblem, options);
+
+            var resumedCount = 0;
+            var resumedProblem = new EvolutionTestProblem<double>(
+                Shape,
+                StandardDoubleFunctionSet.Instance,
+                new DoubleValueSemantics(),
+                new DoubleParameterStrategy(),
+                () => new QuadraticFitness(onEvaluate: () => resumedCount++));
+            var resumed = new EvolutionEngine<double>().Resume(resumedProblem, options, loaded);
+
+            Assert.Equal(continuous.GenerationsRun, resumed.GenerationsRun);
+            var continuousTail = continuousCount - evaluationsBeforeCheckpoint;
+            var extra = resumedCount - continuousTail;
+            Console.WriteLine($"COLD_CACHE total_continuo={continuousCount} prefixo={evaluationsBeforeCheckpoint} cauda_continua={continuousTail} resume={resumedCount} extras={extra}");
+            Assert.True(continuousTail > 0);
+            Assert.True(extra >= 0);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
