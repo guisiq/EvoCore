@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Threading.Tasks;
 using ILGPU.Runtime;
 using Evo.Core;
@@ -121,6 +122,69 @@ public sealed class IlgpuCudaLifecycleTests
         Assert.NotNull(observedBuffers);
         Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
         Assert.Equal("ILGPU/CUDA", evaluator.Backend);
+    }
+
+    [OptionalFact]
+    public void Cancellation_after_cuda_selection_is_explicit_and_disposes_buffers_without_fallback()
+    {
+        var selection = SelectCudaOrSkip();
+
+        var functions = StandardDoubleFunctionSet.Instance;
+        var genome = DoubleGenome("add");
+        MemoryBuffer[]? observedBuffers = null;
+        using var cancellation = new CancellationTokenSource();
+        using var evaluator = new IlgpuGenomeEvaluator<double>(
+            functions,
+            fallback: null,
+            selectionOverride: selection,
+            contextFactory: null,
+            acceleratorFactory: null,
+            beforeKernelExecution: () =>
+            {
+                cancellation.Cancel();
+                cancellation.Token.ThrowIfCancellationRequested();
+            },
+            launchInvoker: null,
+            synchronizeInvoker: null,
+            bufferObserver: buffers => observedBuffers = buffers.ToArray());
+
+        Assert.Throws<OperationCanceledException>(() => evaluator.Evaluate(genome, [1.0, 2.0], new double[1]));
+        Assert.NotNull(observedBuffers);
+        Assert.All(observedBuffers!, buffer => Assert.True(buffer.IsDisposed));
+        Assert.Equal("ILGPU/CUDA", evaluator.Backend);
+        Assert.NotEqual("CPU fallback", evaluator.Backend);
+    }
+
+    /// <summary>
+    /// Falha de compilação do kernel CUDA após a seleção: a construção falha explicitamente, preservando a causa
+    /// original, sem fallback para CPU e sem deixar acelerador/contexto ativos. A falha compartilhada registrada
+    /// para a seleção é limpa ao final para não vazar para outros testes.
+    /// </summary>
+    [OptionalFact]
+    public void Kernel_compilation_failure_after_cuda_selection_is_explicit_without_fallback()
+    {
+        var selection = SelectCudaOrSkip();
+        var functions = StandardDoubleFunctionSet.Instance;
+        var forcedFailure = new InvalidOperationException("falha-compilacao-kernel-cuda-double");
+        try
+        {
+            var error = Assert.Throws<IlgpuBackendInitializationException>(() => new IlgpuGenomeEvaluator<double>(
+                functions,
+                fallback: null,
+                selectionOverride: selection,
+                contextFactory: null,
+                acceleratorFactory: null,
+                beforeKernelExecution: null,
+                launchInvoker: null,
+                synchronizeInvoker: null,
+                bufferObserver: null,
+                beforeKernelLoad: () => throw forcedFailure));
+            Assert.Contains(forcedFailure.Message, error.Message);
+        }
+        finally
+        {
+            IlgpuBackendSelector.ResetForcedFallbackForTests(selection);
+        }
     }
 
     /// <summary>
