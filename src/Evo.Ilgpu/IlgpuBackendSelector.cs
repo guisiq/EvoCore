@@ -166,7 +166,23 @@ public static class IlgpuBackendSelector
         return Selection with { FallbackReason = $"CUDA indisponível ({cuda.FallbackReason}); usando seleção legada" };
     }
 
-    private static IlgpuBackendSelection ProbeCuda()
+    /// <summary>
+    /// Selects the CUDA device with the given physical identity (<c>domínio:barramento:dispositivo</c>),
+    /// revalidated in a fresh context. Throws explicitly when the device is absent, changed or not usable;
+    /// never falls back to another device.
+    /// </summary>
+    public static IlgpuBackendSelection SelectCudaByPciId(string pciId)
+    {
+        var selection = ProbeCuda(pciId);
+        if (selection.Kind != IlgpuBackendKind.CudaDevice)
+        {
+            throw new InvalidOperationException($"dispositivo CUDA '{pciId}' indisponível: {selection.FallbackReason}");
+        }
+
+        return selection;
+    }
+
+    private static IlgpuBackendSelection ProbeCuda(string? requiredPciId = null)
     {
         try
         {
@@ -176,11 +192,14 @@ public static class IlgpuBackendSelector
                 .Select((device, index) => (device, index))
                 .Where(item => item.device.AcceleratorType == AcceleratorType.Cuda)
                 .Select(item => CreateCudaCandidate(item.device, item.index))
+                .Where(candidate => requiredPciId is null || string.Equals(candidate.CudaPciId, requiredPciId, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.CudaPciId, StringComparer.Ordinal)
                 .ToArray();
             if (candidates.Length == 0)
             {
-                return NoCuda("nenhum dispositivo CUDA encontrado pelo runtime ILGPU");
+                return NoCuda(requiredPciId is null
+                    ? "nenhum dispositivo CUDA encontrado pelo runtime ILGPU"
+                    : $"dispositivo CUDA com identidade '{requiredPciId}' ausente ou trocado");
             }
 
             // Catálogo observável: cada candidato CUDA descoberto recebe estado (descoberto -> validado) e motivo de rejeição.
