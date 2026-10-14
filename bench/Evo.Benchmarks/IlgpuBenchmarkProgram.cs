@@ -98,11 +98,31 @@ internal static class IlgpuBenchmarkProgram
             Console.WriteLine($"  falha ao enumerar dispositivos ILGPU: {ex.GetType().Name}: {ex.Message}");
         }
 
+        // CUDA: a seleção só retorna CudaDevice após validar kernels reais (reuso da seleção de 015b).
+        try
+        {
+            var cuda = IlgpuBackendSelector.SelectFor(IlgpuBackendPolicy.CudaPreferred);
+            if (cuda.Kind == IlgpuBackendKind.CudaDevice)
+            {
+                result.Add(cuda);
+            }
+            else
+            {
+                Console.WriteLine($"  CUDA indisponível: {cuda.FallbackReason}");
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.WriteLine($"  falha ao selecionar CUDA: {ex.GetType().Name}: {ex.Message}");
+        }
+
         return result;
     }
 
     private static string DescribeIdentity(IlgpuBackendSelection selection) => selection.Kind switch
     {
+        IlgpuBackendKind.CudaDevice =>
+            $"ILGPU/CUDA :: {selection.DeviceName} [pci={selection.CudaPciId}]",
         IlgpuBackendKind.OpenClDevice =>
             $"ILGPU/OpenCL :: {selection.PlatformName} :: {selection.DeviceName} [platformId={selection.PlatformId}, deviceId={selection.OpenClDeviceId}]",
         IlgpuBackendKind.IlgpuCpu => $"ILGPU/CPU :: {selection.DeviceName} [numThreads={selection.CpuNumThreads}]",
