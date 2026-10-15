@@ -305,9 +305,9 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
             // por índice. O resultado não depende do tamanho do lote nem do número de workers.
             var batchSize = Math.Max(1, batchEvaluator.PreferredBatchSize);
             var batchCount = (missing.Count + batchSize - 1) / batchSize;
-            Parallel.For(0, Math.Min(workers, batchCount), new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, w =>
+            if (workers == 1)
             {
-                for (var b = w; b < batchCount; b += workers)
+                for (var b = 0; b < batchCount; b++)
                 {
                     var start = b * batchSize;
                     var length = Math.Min(batchSize, missing.Count - start);
@@ -317,10 +317,36 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
                         genomes[k] = population[missing[start + k]];
                     }
 
-                    var evaluator = (IBatchFitnessEvaluator<T>)fitnessEvaluators[w];
-                    evaluator.EvaluateBatch(genomes, genomeEvaluators[w], results.AsSpan(start, length), cancellationToken);
+                    var evaluator = (IBatchFitnessEvaluator<T>)fitnessEvaluators[0];
+                    evaluator.EvaluateBatch(genomes, genomeEvaluators[0], results.AsSpan(start, length), cancellationToken);
                 }
-            });
+            }
+            else
+            {
+                Parallel.For(0, Math.Min(workers, batchCount), new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken }, w =>
+                {
+                    for (var b = w; b < batchCount; b += workers)
+                    {
+                        var start = b * batchSize;
+                        var length = Math.Min(batchSize, missing.Count - start);
+                        var genomes = new Genome<T>[length];
+                        for (var k = 0; k < length; k++)
+                        {
+                            genomes[k] = population[missing[start + k]];
+                        }
+
+                        var evaluator = (IBatchFitnessEvaluator<T>)fitnessEvaluators[w];
+                        evaluator.EvaluateBatch(genomes, genomeEvaluators[w], results.AsSpan(start, length), cancellationToken);
+                    }
+                });
+            }
+        }
+        else if (workers == 1)
+        {
+            for (var p = 0; p < missing.Count; p++)
+            {
+                results[p] = fitnessEvaluators[0].Evaluate(population[missing[p]], genomeEvaluators[0], cancellationToken);
+            }
         }
         else
         {
