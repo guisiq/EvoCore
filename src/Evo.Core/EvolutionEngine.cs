@@ -40,6 +40,7 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
 
     private readonly Action<EvolutionProgress>? _progress;
     private readonly Action<EvolutionState<T>>? _checkpoint;
+    private readonly IVariationOperator<T>? _variation;
     private readonly Func<TimeSpan>? _clock;
 
     /// <summary>
@@ -49,6 +50,15 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
     public EvolutionEngine(Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
         : this(progress, checkpoint, null)
     {
+    }
+
+    /// <summary>
+    /// Cria o engine com variação injetada. Sem seleção explícita, o overload legado (torneio padrão) não é alterado.
+    /// </summary>
+    public EvolutionEngine(IVariationOperator<T> variation, Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
+        : this(progress, checkpoint, null)
+    {
+        _variation = variation ?? throw new ArgumentNullException(nameof(variation));
     }
 
     /// <summary>Construtor de teste: <paramref name="clock"/> substitui o relógio de parede do segmento atual.</summary>
@@ -168,10 +178,17 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
                     next[e] = population[elites[e]].Clone(values);
                 }
 
+                var variationContext = _variation is null
+                    ? null
+                    : new VariationContext<T>(population, fitness, options, cancellationToken);
                 for (var i = options.EliteCount; i < n; i++)
                 {
                     var rng = RandomStream.Create(options.Seed, (ulong)(generation + 1), (ulong)i, BreedStreamId);
-                    next[i] = operators.Breed(population, fitness, options, ref rng);
+                    next[i] = variationContext is null
+                        ? operators.Breed(population, fitness, options, ref rng)
+                        : _variation is CompositeVariationOperator<T> composite
+                            ? composite.CreatePositionOffspring(variationContext, i - options.EliteCount, n - options.EliteCount, ref rng)
+                            : _variation.CreateOffspring(variationContext, ref rng);
                 }
 
                 digest = Evaluate(problem, next, nextFitness, fitnessEvaluators, genomeEvaluators, cache, cacheLimit, cancellationToken);
