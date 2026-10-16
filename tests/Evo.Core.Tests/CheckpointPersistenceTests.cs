@@ -94,6 +94,36 @@ public sealed class CheckpointPersistenceTests
     }
 
     [Fact]
+    public void Checkpoint_rejects_incompatible_variation_strategy_identity_before_resume()
+    {
+        var problem = DoubleProblem();
+        var options = Options(5);
+        EvolutionState<double>? captured = null;
+        new EvolutionEngine<double>(checkpoint: s => { if (s.Generation == 2) captured = s; }).Run(problem, options);
+        Assert.NotNull(captured);
+
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "checkpoint.json");
+            CheckpointFile.Save(path, problem, options, captured!, variationStrategyId: "Strategy.A");
+
+            // Identidade divergente é rejeitada antes de qualquer estado ser materializado.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.B"));
+
+            // Identidade igual, ou lado ausente (null), é compatível.
+            var loaded = CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.A");
+            Assert.Equal(captured!.Generation, loaded.Generation);
+            var loadedLegacy = CheckpointFile.Load(path, problem, options);
+            Assert.Equal(captured.Generation, loadedLegacy.Generation);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Checkpoint_population_round_trip_preserves_state()
     {
         var problem = DoubleProblem();

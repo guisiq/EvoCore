@@ -63,6 +63,46 @@ public sealed class CompositeVariationTests
     }
 
     [Fact]
+    public void Composition_rejects_duplicate_instance_and_self_reference_cycle_before_generation()
+    {
+        var shared = new StubOperator();
+        Assert.Throws<ArgumentException>(() => new CompositeVariationOperator<double>(
+            CompositionMode.Sequential,
+            new IVariationOperator<double>[] { shared, shared }));
+
+        var inner = new CompositeVariationOperator<double>(
+            CompositionMode.Sequential,
+            new IVariationOperator<double>[] { new StubOperator() });
+        Assert.Throws<ArgumentException>(() => new CompositeVariationOperator<double>(
+            CompositionMode.Partitioned,
+            new IVariationOperator<double>[] { inner, inner },
+            new[] { 1.0, 1.0 }));
+    }
+
+    [Fact]
+    public void Nested_composition_is_allowed_when_graph_has_no_repeated_instance()
+    {
+        var innerA = new CompositeVariationOperator<double>(
+            CompositionMode.Sequential,
+            new IVariationOperator<double>[] { new StubOperator(), new StubOperator() });
+        var innerB = new CompositeVariationOperator<double>(
+            CompositionMode.Partitioned,
+            new IVariationOperator<double>[] { new StubOperator(), new StubOperator() },
+            new[] { 1.0, 1.0 });
+        var outer = new CompositeVariationOperator<double>(
+            CompositionMode.Partitioned,
+            new IVariationOperator<double>[] { innerA, innerB },
+            new[] { 1.0, 1.0 });
+
+        var context = new VariationContext<double>(
+            new[] { SeedGenome() },
+            new[] { FitnessResult.Valid(0) },
+            Options(1));
+        var rng = RandomStreamFor(1);
+        Assert.NotNull(outer.CreatePositionOffspring(context, 0, 4, ref rng));
+    }
+
+    [Fact]
     public void Sequential_composition_applies_stages_in_order_on_single_offspring()
     {
         var log = new List<int>();

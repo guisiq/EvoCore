@@ -37,15 +37,18 @@ public sealed class CompositeVariationOperator<T> : IVariationOperator<T>
             {
                 throw new ArgumentException($"Operador {i} é nulo.", nameof(stages));
             }
-
-            if (stages[i] is CompositeVariationOperator<T> nested && ReferenceEquals(nested, this))
-            {
-                throw new ArgumentException("Composição não pode referenciar a si mesma.", nameof(stages));
-            }
         }
 
         Mode = mode;
         _stages = stages.ToArray();
+
+        // Rejeita ciclos e reuso da mesma instância em qualquer ponto do grafo de composição,
+        // por identidade de referência, antes de qualquer geração.
+        var visited = new HashSet<IVariationOperator<T>>(ReferenceEqualityComparer.Instance) { this };
+        foreach (var stage in _stages)
+        {
+            VisitForCycles(stage, visited);
+        }
 
         switch (mode)
         {
@@ -112,6 +115,24 @@ public sealed class CompositeVariationOperator<T> : IVariationOperator<T>
         }
 
         return current!;
+    }
+
+    private static void VisitForCycles(IVariationOperator<T> op, HashSet<IVariationOperator<T>> visited)
+    {
+        if (!visited.Add(op))
+        {
+            throw new ArgumentException(
+                "Composição contém ciclo ou reusa a mesma instância de operador em mais de um ponto do grafo.",
+                nameof(op));
+        }
+
+        if (op is CompositeVariationOperator<T> nested)
+        {
+            foreach (var child in nested._stages)
+            {
+                VisitForCycles(child, visited);
+            }
+        }
     }
 
     /// <summary>Operador (índice na lista) responsável pela posição de um lote particionado.</summary>

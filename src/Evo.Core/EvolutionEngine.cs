@@ -44,6 +44,12 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
     private readonly Func<TimeSpan>? _clock;
 
     /// <summary>
+    /// Identidade estável da estratégia de variação injetada (<c>Type.FullName</c>), ou <c>null</c> quando o
+    /// engine usa o caminho legado. Usada para gravar/validar a identidade aditiva no checkpoint.
+    /// </summary>
+    public string? VariationStrategyId => _variation?.GetType().FullName;
+
+    /// <summary>
     /// Cria o engine. <paramref name="progress"/> recebe um relatório por geração completa;
     /// <paramref name="checkpoint"/> recebe o estado completo de cada geração avaliada.
     /// </summary>
@@ -178,17 +184,18 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
                     next[e] = population[elites[e]].Clone(values);
                 }
 
-                var variationContext = _variation is null
+                var variation = _variation;
+                var variationContext = variation is null
                     ? null
                     : new VariationContext<T>(population, fitness, options, cancellationToken);
                 for (var i = options.EliteCount; i < n; i++)
                 {
                     var rng = RandomStream.Create(options.Seed, (ulong)(generation + 1), (ulong)i, BreedStreamId);
-                    next[i] = variationContext is null
+                    next[i] = variation is null || variationContext is null
                         ? operators.Breed(population, fitness, options, ref rng)
-                        : _variation is CompositeVariationOperator<T> composite
+                        : variation is CompositeVariationOperator<T> composite
                             ? composite.CreatePositionOffspring(variationContext, i - options.EliteCount, n - options.EliteCount, ref rng)
-                            : _variation.CreateOffspring(variationContext, ref rng);
+                            : variation.CreateOffspring(variationContext, ref rng);
                 }
 
                 digest = Evaluate(problem, next, nextFitness, fitnessEvaluators, genomeEvaluators, cache, cacheLimit, cancellationToken);
