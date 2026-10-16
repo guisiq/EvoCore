@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Evo.Core\Evo.Core.csproj" />
+    <ProjectReference Include="..\Evo.Examples\Evo.Examples.csproj" />
   </ItemGroup>
 
 </Project>

@@ -42,6 +42,10 @@ public static class Program
                 ("benchmark", "symbolic-regression-30") => RunBenchmark(args[2..]),
                 ("benchmark", "symbolic-regression-suite") => RunRegressionSuiteBenchmark(args[2..]),
                 ("benchmark", "regression-grid") => RunRegressionGrid(args[2..]),
+                ("example", "list") => RunExampleList(),
+                ("example", "run") => RunExampleRun(args[2..]),
+                ("benchmark", "list") => RunExampleList(),
+                ("benchmark", "run") => RunExampleRun(args[2..]),
                 _ => Usage(),
             };
         }
@@ -74,7 +78,76 @@ public static class Program
         Console.WriteLine("  benchmark symbolic-regression-30 [--generations N] [--population N] [--workers N] [--out DIR]");
         Console.WriteLine("  benchmark symbolic-regression-suite [--generations N] [--population N] [--workers N] [--out DIR]");
         Console.WriteLine("  benchmark regression-grid [--seeds N] [--stride N] [--scale N] [--out DIR]");
+        Console.WriteLine("  example list");
+        Console.WriteLine("  example run <id> [--out DIR]");
+        Console.WriteLine("  benchmark list");
+        Console.WriteLine("  benchmark run <id> [--out DIR]");
         Console.WriteLine($"Contrato RNG: {RandomStream.Version}");
+    }
+
+    private static int RunExampleList()
+    {
+        foreach (var scenario in Evo.Examples.Scenarios.BenchmarkScenarioRegistry.All)
+        {
+            Console.WriteLine($"{scenario.Id}\t{scenario.Description}");
+        }
+
+        return 0;
+    }
+
+    private static int RunExampleRun(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Console.Error.WriteLine("uso: example run <id> [--out DIR] | benchmark run <id> [--out DIR]");
+            return 2;
+        }
+
+        var id = args[0];
+        string? outDir = null;
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (args[i] == "--out" && i + 1 < args.Length)
+            {
+                outDir = args[++i];
+            }
+        }
+
+        Evo.Examples.Scenarios.IBenchmarkScenario scenario;
+        try
+        {
+            scenario = Evo.Examples.Scenarios.BenchmarkScenarioRegistry.Resolve(id);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            Console.Error.WriteLine($"erro: {ex.Message}");
+            return 1;
+        }
+
+        var result = scenario.Run(CancellationToken.None);
+        outDir ??= Path.Combine("runs", $"scenario-{id}");
+        Directory.CreateDirectory(outDir);
+        var manifest = new
+        {
+            schema = "evo-benchmark-scenario-result/v1",
+            scenarioId = result.ScenarioId,
+            gatesPassed = result.GatesPassed,
+            gates = result.Gates,
+            measurements = result.Measurements,
+            rawData = result.RawData,
+            parameters = result.Parameters,
+            summary = result.Summary,
+            environment = new
+            {
+                runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+                os = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+            },
+        };
+        File.WriteAllText(Path.Combine(outDir, "scenario-result.json"), JsonSerializer.Serialize(manifest, JsonOptions));
+        Console.WriteLine($"cenário={id} gatesPassed={result.GatesPassed} resumo={result.Summary}");
+        Console.WriteLine($"artefatos: {Path.GetFullPath(outDir)}");
+        return result.GatesPassed ? 0 : 1;
     }
 
     private static int RunDemo(string[] args)
