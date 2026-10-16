@@ -390,7 +390,8 @@ public sealed class PopulationPartitionRunner<T>
 
                 var initial = BuildInitialState(request.Source, partition, state.Problem, cancellationToken);
                 var runner = new EvolutionPipelineRunner<T>();
-                var result = runner.RunFromInitialPopulation(definition, spec.OutputId, initial, spec.EvidenceDirectory, cancellationToken);
+                var lineage = request.Source.Lineage.Append(spec.OutputId).ToArray();
+                var result = runner.RunFromInitialPopulation(definition, spec.OutputId, initial, spec.EvidenceDirectory, lineage, cancellationToken);
                 results[i] = new PopulationPartitionRunResult<T>(spec.OutputId, PopulationPartitionOutcome.Success, result, null);
             }
             catch (OperationCanceledException)

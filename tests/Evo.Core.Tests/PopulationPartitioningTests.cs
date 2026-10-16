@@ -92,23 +92,34 @@ public sealed class PopulationPartitioningTests
         Assert.Throws<InvalidOperationException>(() => partitioner.Partition(request));
     }
 
-    [Fact]
-    public void DisjointSelected_allows_explicit_discard()
+    private static void AssertDisjointSelectedAllowsExplicitDiscard<T>(EvolutionTestProblem<T> problem)
     {
-        var problem = DoubleProblem();
         var population = InitialPopulation(problem, 5);
-        var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem);
+        var snapshot = PopulationSnapshot<T>.FromPopulation(population, problem);
         var outputs = new[] { new PopulationOutputSpec("a", 1, Path.GetTempPath()) };
-        var request = new PopulationPartitionRequest<double>(snapshot, outputs, PopulationPartitionMode.DisjointSelected, 1);
-        var partitioner = new DelegatePopulationPartitioner<double>("selected", _ => new[]
+        var request = new PopulationPartitionRequest<T>(snapshot, outputs, PopulationPartitionMode.DisjointSelected, 1);
+        var partitioner = new DelegatePopulationPartitioner<T>("selected", _ => new[]
         {
-            new PopulationPartition<double>(outputs[0], new[] { 0, 2 }), // 1, 3, 4 descartados
+            new PopulationPartition<T>(outputs[0], new[] { 0, 2 }), // 1, 3, 4 descartados
         });
 
         var partitions = partitioner.Partition(request);
 
+        Assert.Equal(2, partitions[0].SourceIndices.Count);
         Assert.Equal(new[] { 0, 2 }, partitions[0].SourceIndices);
     }
+
+    [Fact]
+    public void DisjointSelected_allows_explicit_discard_double() => AssertDisjointSelectedAllowsExplicitDiscard(DoubleProblem());
+
+    [Fact]
+    public void DisjointSelected_allows_explicit_discard_int() => AssertDisjointSelectedAllowsExplicitDiscard(IntProblem());
+
+    [Fact]
+    public void DisjointSelected_allows_explicit_discard_double_array() => AssertDisjointSelectedAllowsExplicitDiscard(DoubleArrayProblem());
+
+    [Fact]
+    public void DisjointSelected_allows_explicit_discard_int_array() => AssertDisjointSelectedAllowsExplicitDiscard(IntArrayProblem());
 
     [Fact]
     public void DisjointSelected_rejects_double_assignment()
@@ -131,33 +142,53 @@ public sealed class PopulationPartitioningTests
         Assert.Throws<InvalidOperationException>(() => partitioner.Partition(request));
     }
 
-    [Fact]
-    public void Overlapping_allows_explicit_duplicate_with_independent_deep_clones()
+    private static void AssertOverlappingAllowsExplicitDuplicateWithIndependentDeepClones<T>(
+        EvolutionTestProblem<T> problem, IValueSemantics<T> values, T marker, Func<T, T, bool> equal)
     {
-        var problem = DoubleProblem();
         var population = InitialPopulation(problem, 4);
-        var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem);
+        var snapshot = PopulationSnapshot<T>.FromPopulation(population, problem);
         var outputs = new[]
         {
             new PopulationOutputSpec("a", 1, Path.GetTempPath()),
             new PopulationOutputSpec("b", 2, Path.GetTempPath()),
         };
-        var request = new PopulationPartitionRequest<double>(snapshot, outputs, PopulationPartitionMode.Overlapping, 1);
-        var partitioner = new DelegatePopulationPartitioner<double>("overlap", _ => new[]
+        var request = new PopulationPartitionRequest<T>(snapshot, outputs, PopulationPartitionMode.Overlapping, 1);
+        var partitioner = new DelegatePopulationPartitioner<T>("overlap", _ => new[]
         {
-            new PopulationPartition<double>(outputs[0], new[] { 0, 1 }),
-            new PopulationPartition<double>(outputs[1], new[] { 1, 2 }), // índice 1 em ambas as saídas
+            new PopulationPartition<T>(outputs[0], new[] { 0, 1 }),
+            new PopulationPartition<T>(outputs[1], new[] { 1, 2 }), // índice 1 em ambas as saídas
         });
 
         var partitions = partitioner.Partition(request);
 
-        var cloneForA = snapshot.GenomeAt(1, DoubleValueSemantics.Instance);
-        var cloneForB = snapshot.GenomeAt(1, DoubleValueSemantics.Instance);
-        Assert.NotSame(cloneForA, cloneForB);
-        cloneForA.SetParameterGene(0, 123456.0);
-        Assert.NotEqual(123456.0, cloneForB.ParameterGenes[0]);
         Assert.Equal(2, partitions.Count);
+        Assert.Equal(new[] { 0, 1 }, partitions[0].SourceIndices);
+        Assert.Equal(new[] { 1, 2 }, partitions[1].SourceIndices);
+
+        var cloneForA = snapshot.GenomeAt(1, values);
+        var cloneForB = snapshot.GenomeAt(1, values);
+        Assert.NotSame(cloneForA, cloneForB);
+        cloneForA.SetParameterGene(0, marker);
+        Assert.False(equal(marker, cloneForB.ParameterGenes[0]));
     }
+
+    [Fact]
+    public void Overlapping_allows_explicit_duplicate_with_independent_deep_clones_double() =>
+        AssertOverlappingAllowsExplicitDuplicateWithIndependentDeepClones(DoubleProblem(), DoubleValueSemantics.Instance, 123456.0, (a, b) => a.Equals(b));
+
+    [Fact]
+    public void Overlapping_allows_explicit_duplicate_with_independent_deep_clones_int() =>
+        AssertOverlappingAllowsExplicitDuplicateWithIndependentDeepClones(IntProblem(), Int32ValueSemantics.Instance, 123456, (a, b) => a.Equals(b));
+
+    [Fact]
+    public void Overlapping_allows_explicit_duplicate_with_independent_deep_clones_double_array() =>
+        AssertOverlappingAllowsExplicitDuplicateWithIndependentDeepClones(
+            DoubleArrayProblem(), DoubleArrayValueSemantics.Instance, new[] { 123456.0, 123456.0 }, (a, b) => a.SequenceEqual(b));
+
+    [Fact]
+    public void Overlapping_allows_explicit_duplicate_with_independent_deep_clones_int_array() =>
+        AssertOverlappingAllowsExplicitDuplicateWithIndependentDeepClones(
+            IntArrayProblem(), Int32ArrayValueSemantics.Instance, new[] { 123456, 123456 }, (a, b) => a.SequenceEqual(b));
 
     [Fact]
     public void Snapshot_does_not_expose_fitness_cache_or_evaluator_state()
@@ -181,10 +212,10 @@ public sealed class PopulationPartitioningTests
         var population = InitialPopulation(problem, 8, seed: 7);
         var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem);
 
-        PopulationPartitionRequest<double> MakeRequest(out string dirA, out string dirB)
+        PopulationPartitionRequest<double> MakeRequest()
         {
-            dirA = Path.Combine(Path.GetTempPath(), "evo-partition-" + Guid.NewGuid().ToString("N"));
-            dirB = Path.Combine(Path.GetTempPath(), "evo-partition-" + Guid.NewGuid().ToString("N"));
+            var dirA = Path.Combine(Path.GetTempPath(), "evo-partition-" + Guid.NewGuid().ToString("N"));
+            var dirB = Path.Combine(Path.GetTempPath(), "evo-partition-" + Guid.NewGuid().ToString("N"));
             var outputs = new[]
             {
                 new PopulationOutputSpec("left", 101, dirA),
@@ -206,17 +237,19 @@ public sealed class PopulationPartitioningTests
             });
 
         var runner = new PopulationPartitionRunner<double>();
-        var sequential = runner.Run(MakeRequest(out _, out _), new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 1);
-        var concurrent = runner.Run(MakeRequest(out _, out _), new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 2);
+        var baseline = runner.Run(MakeRequest(), new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 1);
 
-        Assert.Equal(2, sequential.Count);
-        Assert.Equal(new[] { "left", "right" }, sequential.Select(r => r.OutputId));
-        for (var i = 0; i < sequential.Count; i++)
+        foreach (var workers in new[] { 1, 2, 4 })
         {
-            Assert.Equal(PopulationPartitionOutcome.Success, sequential[i].Outcome);
-            Assert.Equal(PopulationPartitionOutcome.Success, concurrent[i].Outcome);
-            Assert.Equal(sequential[i].Result!.BestFitness.Value, concurrent[i].Result!.BestFitness.Value);
-            Assert.Equal(sequential[i].OutputId, concurrent[i].OutputId);
+            var result = runner.Run(MakeRequest(), new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: workers);
+            Assert.Equal(2, result.Count);
+            Assert.Equal(new[] { "left", "right" }, result.Select(r => r.OutputId));
+            for (var i = 0; i < baseline.Count; i++)
+            {
+                Assert.Equal(PopulationPartitionOutcome.Success, result[i].Outcome);
+                Assert.Equal(baseline[i].OutputId, result[i].OutputId);
+                Assert.Equal(baseline[i].Result!.BestFitness.Value, result[i].Result!.BestFitness.Value);
+            }
         }
     }
 
@@ -257,5 +290,143 @@ public sealed class PopulationPartitioningTests
         Assert.Equal(PopulationPartitionOutcome.Success, results[0].Outcome);
         Assert.Equal(PopulationPartitionOutcome.Failure, results[1].Outcome);
         Assert.NotNull(results[1].Error);
+
+        // Atomicidade: a falha isolada na saída "incompatible" não altera os artefatos nem o resultado da saída "ok".
+        var okStore = new FileEvolutionEvidenceStore(outputs[0].EvidenceDirectory);
+        var manifest = okStore.ReadManifest();
+        Assert.Equal("ok", manifest.RunId);
+        Assert.False(Directory.Exists(outputs[1].EvidenceDirectory) && File.Exists(Path.Combine(outputs[1].EvidenceDirectory, "manifest.json")));
+    }
+
+    [Fact]
+    public void Runner_cooperative_cancellation_yields_cancelled_outcome_in_declared_order()
+    {
+        var problem = DoubleProblem();
+        var population = InitialPopulation(problem, 6, seed: 5);
+        var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem);
+        var outputs = new[]
+        {
+            new PopulationOutputSpec("first", 1, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+            new PopulationOutputSpec("second", 2, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+            new PopulationOutputSpec("third", 3, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+        };
+        var request = new PopulationPartitionRequest<double>(snapshot, outputs, PopulationPartitionMode.DisjointExhaustive, 1);
+
+        EvolutionPipelineDefinition<double> DefinitionFactory(PopulationOutputSpec spec, int populationSize) =>
+            new("pipe-cancel", "main", new[]
+            {
+                new EvolutionPipelineState<double>("main", DoubleProblem(), new EvolutionOptions
+                {
+                    PopulationSize = populationSize,
+                    MaxGenerations = 2,
+                    Seed = spec.Seed,
+                    WorkerCount = 1,
+                }),
+            });
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var runner = new PopulationPartitionRunner<double>();
+        var results = runner.Run(request, new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 1, cts.Token);
+
+        Assert.Equal(new[] { "first", "second", "third" }, results.Select(r => r.OutputId));
+        Assert.All(results, r => Assert.Equal(PopulationPartitionOutcome.Cancelled, r.Outcome));
+    }
+
+    [Fact]
+    public void Runner_cancellation_of_one_output_does_not_alter_artifacts_of_a_completed_output()
+    {
+        var problem = DoubleProblem();
+        var population = InitialPopulation(problem, 6, seed: 9);
+        var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem);
+        var outputs = new[]
+        {
+            new PopulationOutputSpec("ok", 1, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+            new PopulationOutputSpec("to-cancel", 2, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+        };
+        var request = new PopulationPartitionRequest<double>(snapshot, outputs, PopulationPartitionMode.DisjointExhaustive, 1);
+
+        using var cts = new CancellationTokenSource();
+
+        EvolutionPipelineDefinition<double> DefinitionFactory(PopulationOutputSpec spec, int populationSize)
+        {
+            if (spec.OutputId == "to-cancel")
+            {
+                cts.Cancel(); // cancela somente depois que a saída "ok" já concluiu, em execução sequencial
+            }
+
+            return new("pipe-cancel-atomic", "main", new[]
+            {
+                new EvolutionPipelineState<double>("main", DoubleProblem(), new EvolutionOptions
+                {
+                    PopulationSize = populationSize,
+                    MaxGenerations = 2,
+                    Seed = spec.Seed,
+                    WorkerCount = 1,
+                }),
+            });
+        }
+
+        var runner = new PopulationPartitionRunner<double>();
+        var results = runner.Run(request, new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 1, cts.Token);
+
+        Assert.Equal(PopulationPartitionOutcome.Success, results[0].Outcome);
+        Assert.Equal(PopulationPartitionOutcome.Cancelled, results[1].Outcome);
+
+        var okStore = new FileEvolutionEvidenceStore(outputs[0].EvidenceDirectory);
+        var manifest = okStore.ReadManifest();
+        Assert.Equal("ok", manifest.RunId);
+        var events = okStore.ReadEvents();
+        Assert.NotEmpty(events);
+        Assert.Equal(nameof(EvolutionPipelineDecisionKind.Stop), events[^1].DecisionKind);
+    }
+
+    [Fact]
+    public void Runner_output_lineage_is_persisted_and_resume_rejects_other_output_identity()
+    {
+        var problem = DoubleProblem();
+        var population = InitialPopulation(problem, 4, seed: 13);
+        var snapshot = PopulationSnapshot<double>.FromPopulation(population, problem, new[] { "source-run" });
+        var outputs = new[]
+        {
+            new PopulationOutputSpec("alpha", 1, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+            new PopulationOutputSpec("beta", 2, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))),
+        };
+        var request = new PopulationPartitionRequest<double>(snapshot, outputs, PopulationPartitionMode.DisjointExhaustive, 1);
+
+        EvolutionPipelineDefinition<double> DefinitionFactory(PopulationOutputSpec spec, int populationSize) =>
+            new("pipe-lineage", "main", new[]
+            {
+                new EvolutionPipelineState<double>("main", DoubleProblem(), new EvolutionOptions
+                {
+                    PopulationSize = populationSize,
+                    MaxGenerations = 1,
+                    Seed = spec.Seed,
+                    WorkerCount = 1,
+                }),
+            });
+
+        var runner = new PopulationPartitionRunner<double>();
+        var results = runner.Run(request, new ContiguousBlockPartitioner<double>(), DefinitionFactory, maxDegreeOfParallelism: 1);
+        Assert.All(results, r => Assert.Equal(PopulationPartitionOutcome.Success, r.Outcome));
+
+        var alphaStore = new FileEvolutionEvidenceStore(outputs[0].EvidenceDirectory);
+        var alphaManifest = alphaStore.ReadManifest();
+        Assert.Equal(new[] { "source-run", "alpha" }, alphaManifest.Lineage);
+
+        var pipelineRunner = new EvolutionPipelineRunner<double>();
+        var definition = DefinitionFactory(outputs[0], 2);
+
+        // Resume rejeita o uso da lineage declarada da OUTRA saída ("beta") sobre os artefatos de "alpha".
+        var wrongLineage = new[] { "source-run", "beta" };
+        var ex = Assert.Throws<InvalidDataException>(
+            () => pipelineRunner.Resume(definition, "alpha", outputs[0].EvidenceDirectory, wrongLineage));
+        Assert.Contains("Lineage", ex.Message);
+
+        // Com a lineage correta da própria saída, a validação de lineage passa; a exceção aqui (se houver) é a de
+        // "pipeline já concluído", não mais relacionada a identidade/lineage.
+        var correctLineage = new[] { "source-run", "alpha" };
+        var other = Record.Exception(() => pipelineRunner.Resume(definition, "alpha", outputs[0].EvidenceDirectory, correctLineage));
+        Assert.IsNotType<InvalidDataException>(other);
     }
 }

@@ -51,6 +51,7 @@ public sealed class EvolutionPipelineRunner<T>
         string runId,
         EvolutionState<T> initialState,
         string? evidenceDirectory = null,
+        IReadOnlyList<string>? lineage = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
@@ -64,7 +65,8 @@ public sealed class EvolutionPipelineRunner<T>
                 definition.PipelineId,
                 runId,
                 effective.Sha256,
-                DateTime.UtcNow.ToString("O")),
+                DateTime.UtcNow.ToString("O"),
+                lineage),
             effective.Json);
         var session = new Session(definition.PipelineId, runId, store, 0, 0);
         return Drive(definition, session, definition.InitialStateId, initialState, false, 0, cancellationToken);
@@ -74,10 +76,16 @@ public sealed class EvolutionPipelineRunner<T>
     /// Retoma uma evidência existente. Valida manifesto, identidade efetiva e checkpoint do último evento antes de continuar.
     /// Um pipeline cujo último evento é <c>Stop</c> já está concluído e é recusado.
     /// </summary>
+    /// <param name="expectedLineage">
+    /// Quando informada, deve ser idêntica (em conteúdo e ordem) ao <c>Lineage</c> gravado no manifesto desta
+    /// evidência. Garante que o resume de uma saída de particionamento use exclusivamente os artefatos dessa
+    /// própria saída: tentar retomar a evidência de uma saída usando a lineage declarada de outra saída é rejeitado.
+    /// </param>
     public EvolutionPipelineResult<T> Resume(
         EvolutionPipelineDefinition<T> definition,
         string runId,
         string evidenceDirectory,
+        IReadOnlyList<string>? expectedLineage = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
@@ -91,6 +99,12 @@ public sealed class EvolutionPipelineRunner<T>
             || manifest.EffectiveParametersSha256 != effective.Sha256)
         {
             throw new InvalidDataException("Manifesto incompatível com pipeline, run ou parâmetros efetivos.");
+        }
+
+        if (expectedLineage is not null && !expectedLineage.SequenceEqual(manifest.Lineage ?? Array.Empty<string>()))
+        {
+            throw new InvalidDataException(
+                "Lineage do manifesto diverge da lineage esperada; resume rejeitado para evitar usar a identidade de outra saída.");
         }
 
         if (store.ReadEffectiveParameters() != effective.Json)
