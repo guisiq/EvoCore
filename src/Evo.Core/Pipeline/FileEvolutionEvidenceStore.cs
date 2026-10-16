@@ -60,7 +60,7 @@ public sealed class FileEvolutionEvidenceStore
             throw new InvalidDataException("Manifesto ausente; nada a retomar.");
         }
 
-        return JsonSerializer.Deserialize<EvolutionPipelineManifest>(File.ReadAllText(ManifestPath, Encoding.UTF8))
+        return JsonSerializer.Deserialize<EvolutionPipelineManifest>(File.ReadAllText(ManifestPath, Encoding.UTF8), Json)
             ?? throw new InvalidDataException("Manifesto inválido.");
     }
 
