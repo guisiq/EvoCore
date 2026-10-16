@@ -1,0 +1,45 @@
+{
+  "schema": "evo-benchmark-datasets/v1",
+  "datasets": [
+    {
+      "id": "boston-housing",
+      "file": "boston-housing.arff",
+      "format": "arff",
+      "records": 506,
+      "features": 13,
+      "target": "MEDV",
+      "downloadUrl": "https://www.openml.org/data/v1/download/52643/boston.arff",
+      "sourceUrl": "http://lib.stat.cmu.edu/datasets/boston",
+      "registryUrl": "https://www.openml.org/d/531",
+      "license": "Public",
+      "sha256": "2826ddb8cbce925e98114491f4774544b17d70ff0b7b1eede2af0a2ffd85a4f0"
+    },
+    {
+      "id": "pima-diabetes",
+      "file": "pima-diabetes.arff",
+      "format": "arff",
+      "records": 768,
+      "features": 8,
+      "target": "class",
+      "downloadUrl": "https://www.openml.org/data/v1/download/37/diabetes.arff",
+      "sourceUrl": "https://archive.ics.uci.edu/dataset/34/diabetes",
+      "registryUrl": "https://www.openml.org/d/37",
+      "license": "Public",
+      "sha256": "4eddd5b2b64679e8888348e306520a393d6a28e1ddc9643cfb76fc5d912d6d40"
+    },
+    {
+      "id": "wine-quality-red",
+      "file": "wine-quality-red.csv",
+      "format": "csv-semicolon",
+      "records": 1599,
+      "features": 11,
+      "target": "quality",
+      "downloadUrl": "https://archive.ics.uci.edu/static/public/186/wine+quality.zip",
+      "sourceUrl": "https://archive.ics.uci.edu/dataset/186/wine+quality",
+      "doi": "10.24432/C56S3T",
+      "license": "CC BY 4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/legalcode",
+      "sha256": "4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e"
+    }
+  ]
+}
