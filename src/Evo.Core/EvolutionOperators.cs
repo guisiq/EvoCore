@@ -117,11 +117,12 @@ public sealed class EvolutionOperators<T>
         IReadOnlyList<Genome<T>> population,
         IReadOnlyList<FitnessResult> fitness,
         EvolutionOptions options,
-        ref RandomStream random)
+        ref RandomStream random,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(options);
-        var context = new ParentSelectionContext<T>(population, fitness);
+        var context = new ParentSelectionContext<T>(population, fitness, cancellationToken);
 
         var a = population[SelectValidIndex(selector, context, ref random)];
         var functionGenes = a.FunctionGenes.ToArray();
@@ -141,6 +142,7 @@ public sealed class EvolutionOperators<T>
 
     private static int SelectValidIndex(IParentSelector<T> selector, ParentSelectionContext<T> context, ref RandomStream random)
     {
+        context.CancellationToken.ThrowIfCancellationRequested();
         var index = selector.SelectParentIndex(context, ref random);
         if ((uint)index >= (uint)context.Count)
         {

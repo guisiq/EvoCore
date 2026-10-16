@@ -24,6 +24,6 @@ public sealed class StandardVariationOperator<T> : IVariationOperator<T>
     {
         ArgumentNullException.ThrowIfNull(context);
         var selector = _selector ?? new TournamentParentSelector<T>(context.Options.TournamentSize);
-        return _operators.BreedWith(selector, context.Population, context.Fitness, context.Options, ref random);
+        return _operators.BreedWith(selector, context.Population, context.Fitness, context.Options, ref random, context.CancellationToken);
     }
 }

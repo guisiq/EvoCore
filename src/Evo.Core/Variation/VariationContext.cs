@@ -6,13 +6,21 @@ namespace Evo.Core;
 public sealed class VariationContext<T>
 {
     /// <summary>Cria o contexto validando argumentos e que população e fitness têm o mesmo tamanho.</summary>
-    public VariationContext(IReadOnlyList<Genome<T>> population, IReadOnlyList<FitnessResult> fitness, EvolutionOptions options)
+    public VariationContext(
+        IReadOnlyList<Genome<T>> population,
+        IReadOnlyList<FitnessResult> fitness,
+        EvolutionOptions options,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
-        Population = new ParentSelectionContext<T>(population, fitness).Population;
+        Population = new ParentSelectionContext<T>(population, fitness, cancellationToken).Population;
         Fitness = fitness;
         Options = options;
+        CancellationToken = cancellationToken;
     }
+
+    /// <summary>Token de cancelamento aplicado à criação dos descendentes.</summary>
+    public CancellationToken CancellationToken { get; }
 
     /// <summary>Indivíduos da geração anterior.</summary>
     public IReadOnlyList<Genome<T>> Population { get; }
