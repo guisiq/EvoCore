@@ -5,13 +5,20 @@ using System.Text.Json;
 
 namespace Evo.Core.Pipeline;
 
-/// <summary>Manifesto de uma execução; é o último arquivo escrito na criação (ponto de commit).</summary>
+/// <summary>
+/// Manifesto de uma execução; é o último arquivo escrito na criação (ponto de commit). <paramref name="Lineage"/>
+/// é a cadeia de identificadores de origem desta execução (por exemplo, a lineage do <c>PopulationSnapshot</c>
+/// mais o <c>OutputId</c> declarado), usada por <see cref="FileEvolutionEvidenceStore"/> e
+/// <see cref="EvolutionPipelineRunner{T}.Resume"/> para garantir que o resume de uma saída só use os
+/// artefatos dessa própria saída, rejeitando a identidade de qualquer outra.
+/// </summary>
 public sealed record EvolutionPipelineManifest(
     string Schema,
     string PipelineId,
     string RunId,
     string EffectiveParametersSha256,
-    string CreatedUtc);
+    string CreatedUtc,
+    IReadOnlyList<string>? Lineage = null);
 
 /// <summary>
 /// Armazenamento de evidência em arquivos BCL: manifesto e parâmetros efetivos escritos atomicamente,
