@@ -232,4 +232,10 @@ internal sealed class CheckpointDto
     public string? BestFitnessValue { get; set; }
     public bool BestFitnessIsValid { get; set; }
     public long? ActiveElapsedTicks { get; set; }
+
+    /// <summary>
+    /// Campo aditivo (schema v2+): identidade da estratégia de variação injetada no engine.
+    /// Ausente em checkpoints legados ou quando o engine usa o caminho legado; nesse caso não é validada.
+    /// </summary>
+    public string? VariationStrategyId { get; set; }
 }

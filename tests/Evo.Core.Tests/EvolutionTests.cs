@@ -397,6 +397,29 @@ public sealed class EvolutionEngineTests
     }
 
     [Fact]
+    public void Evolution_error_during_breeding_propagates_without_fallback_and_discards_partial_generation()
+    {
+        var checkpoints = new List<EvolutionState<double>>();
+        var progressReports = new List<EvolutionProgress>();
+        var variation = new ThrowingVariationOperator();
+        var engine = new EvolutionEngine<double>(variation, progressReports.Add, checkpoints.Add);
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => engine.Run(Problem(), Options(1)));
+        Assert.Equal("boom", thrown.Message);
+
+        // Somente a geração 0 (completa) foi publicada; a geração parcial que falhou nunca aparece
+        // em progresso nem em checkpoint, e nenhum resultado de fallback é produzido.
+        Assert.Equal(new[] { 0 }, progressReports.Select(p => p.Generation));
+        Assert.Equal(new[] { 0 }, checkpoints.Select(c => c.Generation));
+    }
+
+    private sealed class ThrowingVariationOperator : IVariationOperator<double>
+    {
+        public Genome<double> CreateOffspring(VariationContext<double> context, ref RandomStream random) =>
+            throw new InvalidOperationException("boom");
+    }
+
+    [Fact]
     public void Evolution_target_fitness_stops_at_first_generation()
     {
         var options = Options(1) with { TargetFitness = double.NegativeInfinity };

@@ -31,7 +31,7 @@ public static class CheckpointFile
     /// Salva o estado de forma atômica: o conteúdo é escrito em arquivo temporário no mesmo diretório,
     /// com flush, e substitui o destino por rename. Em falha, o checkpoint anterior permanece intacto.
     /// </summary>
-    public static void Save<T>(string path, IGeneticProblem<T> problem, EvolutionOptions options, EvolutionState<T> state)
+    public static void Save<T>(string path, IGeneticProblem<T> problem, EvolutionOptions options, EvolutionState<T> state, string? variationStrategyId = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(problem);
@@ -70,6 +70,7 @@ public static class CheckpointFile
             BestFitnessValue = DoubleBits.Encode(state.BestFitness.Value),
             BestFitnessIsValid = state.BestFitness.IsValid,
             ActiveElapsedTicks = state.ActiveElapsed.Ticks,
+            VariationStrategyId = variationStrategyId,
         };
 
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(dto, PersistenceJson.Options));
@@ -80,7 +81,7 @@ public static class CheckpointFile
     /// Lê e valida um checkpoint. Todas as verificações (schema, problema, FunctionSet, ValueTypeId, RNG,
     /// shape, opções e genomas) ocorrem antes de qualquer estado ser devolvido; em falha nada é materializado.
     /// </summary>
-    public static EvolutionState<T> Load<T>(string path, IGeneticProblem<T> problem, EvolutionOptions options)
+    public static EvolutionState<T> Load<T>(string path, IGeneticProblem<T> problem, EvolutionOptions options, string? variationStrategyId = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(problem);
@@ -102,6 +103,14 @@ public static class CheckpointFile
         }
 
         ValidateHeader(dto, problem, options);
+        // A identidade de estratégia é canônica a partir do schema v2: ambos os lados (inclusive null,
+        // que significa caminho legado/padrão) precisam coincidir exatamente. Checkpoints legados
+        // (schema v1) não carregam a informação e são sempre compatíveis, preservando leitura antiga.
+        if (dto.SchemaVersion == SchemaVersion &&
+            !string.Equals(dto.VariationStrategyId, variationStrategyId, StringComparison.Ordinal))
+        {
+            throw GenomeJson.Invalid("identidade de operador de variação compatível com o checkpoint");
+        }
 
         var n = options.PopulationSize;
         if (dto.Population is null || dto.Population.Length != n)

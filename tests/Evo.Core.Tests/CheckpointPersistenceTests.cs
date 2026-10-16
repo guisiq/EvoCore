@@ -94,6 +94,104 @@ public sealed class CheckpointPersistenceTests
     }
 
     [Fact]
+    public void Checkpoint_rejects_incompatible_variation_strategy_identity_before_resume()
+    {
+        var problem = DoubleProblem();
+        var options = Options(5);
+        EvolutionState<double>? captured = null;
+        new EvolutionEngine<double>(checkpoint: s => { if (s.Generation == 2) captured = s; }).Run(problem, options);
+        Assert.NotNull(captured);
+
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "checkpoint.json");
+            CheckpointFile.Save(path, problem, options, captured!, variationStrategyId: "Strategy.A");
+
+            // Identidade divergente é rejeitada antes de qualquer estado ser materializado.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.B"));
+
+            // Customizada versus padrão (ausência) também é rejeitada: a identidade é canônica, não aditiva.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options));
+
+            // Identidade igual é compatível.
+            var loaded = CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.A");
+            Assert.Equal(captured!.Generation, loaded.Generation);
+
+            var defaultPath = Path.Combine(dir, "checkpoint-default.json");
+            CheckpointFile.Save(defaultPath, problem, options, captured!);
+            // Ambos ausentes (caminho padrão nos dois lados) é compatível.
+            var loadedDefault = CheckpointFile.Load(defaultPath, problem, options);
+            Assert.Equal(captured.Generation, loadedDefault.Generation);
+            // Padrão versus customizado também é rejeitado.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(defaultPath, problem, options, variationStrategyId: "Strategy.A"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Checkpoint_resume_with_custom_composite_strategy_via_real_engine_matches_continuous_run()
+    {
+        const int generations = 10;
+        const int checkpointAt = 4;
+        var problem = DoubleProblem();
+
+        CompositeVariationOperator<double> MakeComposite() => new(
+            CompositionMode.Partitioned,
+            new IVariationOperator<double>[]
+            {
+                new StandardVariationOperator<double>(problem),
+                new StandardVariationOperator<double>(problem),
+            },
+            new[] { 2.0, 1.0 });
+
+        var options = Options(generations);
+        var fullEngine = new EvolutionEngine<double>(MakeComposite());
+        var full = fullEngine.Run(problem, options);
+
+        EvolutionState<double>? state = null;
+        var partialEngine = new EvolutionEngine<double>(
+            MakeComposite(),
+            checkpoint: s => { if (s.Generation == checkpointAt) state = s; });
+        partialEngine.Run(problem, options);
+        Assert.NotNull(state);
+        Assert.NotNull(partialEngine.VariationStrategyId);
+
+        var dir = NewTempDir();
+        try
+        {
+            var path = Path.Combine(dir, "checkpoint.json");
+            CheckpointFile.Save(path, problem, options, state!, partialEngine.VariationStrategyId);
+
+            var resumeEngine = new EvolutionEngine<double>(MakeComposite());
+            var loaded = CheckpointFile.Load(path, problem, options, resumeEngine.VariationStrategyId);
+            var resumed = resumeEngine.Resume(problem, options, loaded);
+
+            Assert.Equal(full.BestFitness, resumed.BestFitness);
+            Assert.Equal(full.GenerationsRun, resumed.GenerationsRun);
+            AssertSameGenome(full.BestGenome, resumed.BestGenome, problem, DoubleBits);
+
+            // Estratégia incompatível (pesos diferentes) é rejeitada antes de materializar estado.
+            var mismatched = new EvolutionEngine<double>(new CompositeVariationOperator<double>(
+                CompositionMode.Partitioned,
+                new IVariationOperator<double>[]
+                {
+                    new StandardVariationOperator<double>(problem),
+                    new StandardVariationOperator<double>(problem),
+                },
+                new[] { 1.0, 1.0 }));
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options, mismatched.VariationStrategyId));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Checkpoint_population_round_trip_preserves_state()
     {
         var problem = DoubleProblem();

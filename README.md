@@ -125,3 +125,66 @@ gráfico por métrica com uma cor por experimento, linhas individuais em baixa
 opacidade, média em destaque e baselines pontilhados, além da avaliação de
 qualidade contínua. O notebook não é consumido pela build nem pelos testes deste
 repositório.
+
+## Seletor e variação próprios de um consumidor externo
+
+Um projeto externo pode implementar o problema genético e estender a evolução
+com seu próprio seletor de pais (`IParentSelector<T>`) e operador de variação
+(`IVariationOperator<T>`), compondo-os com `CompositeVariationOperator<T>` sem
+depender de nenhum tipo interno de `Evo.Core`. O exemplo abaixo (ver também
+`tests/Evo.ExternalConsumer`) compila com uma referência de projeto a
+`Evo.Core`:
+
+```csharp
+using Evo.Core;
+
+// Seletor próprio: torneio binário com empate para o menor índice.
+public sealed class ConsumerParentSelector<T> : IParentSelector<T>
+{
+    public int SelectParentIndex(ParentSelectionContext<T> context, ref RandomStream random)
+    {
+        var first = random.NextInt(0, context.Count);
+        var second = random.NextInt(0, context.Count);
+        var cmp = EvolutionOperators<T>.CompareFitness(context.Fitness[second], context.Fitness[first]);
+        return cmp > 0 || (cmp == 0 && second < first) ? second : first;
+    }
+}
+
+// Operador de variação próprio: usa o seletor acima com crossover/mutação padrão.
+public sealed class ConsumerVariationOperator<T> : IVariationOperator<T>
+{
+    private readonly EvolutionOperators<T> _operators;
+    private readonly IParentSelector<T> _selector;
+
+    public ConsumerVariationOperator(IGeneticProblem<T> problem, IParentSelector<T> selector)
+    {
+        _operators = new EvolutionOperators<T>(problem);
+        _selector = selector;
+    }
+
+    public Genome<T> CreateOffspring(VariationContext<T> context, ref RandomStream random) =>
+        _operators.BreedWith(_selector, context.Population, context.Fitness, context.Options, ref random);
+}
+
+// Composição: metade das posições usa o operador do consumidor, metade usa o
+// operador padrão do engine (Sequential encadearia os dois no mesmo descendente).
+var problem = new MyGeneticProblem();
+var composite = new CompositeVariationOperator<double>(
+    CompositionMode.Partitioned,
+    new IVariationOperator<double>[]
+    {
+        new ConsumerVariationOperator<double>(problem, new ConsumerParentSelector<double>()),
+        new StandardVariationOperator<double>(problem),
+    },
+    weights: new[] { 1.0, 1.0 });
+
+var engine = new EvolutionEngine<double>(composite);
+var result = engine.Run(problem, new EvolutionOptions { PopulationSize = 64, MaxGenerations = 50, Seed = 1 });
+```
+
+O construtor `EvolutionEngine<T>(IVariationOperator<T> variation, ...)` preserva
+o overload legado (sem variação injetada, torneio padrão); checkpoints gravados
+com uma estratégia customizada carregam a identidade canônica da composição
+(`CompositeVariationOperator<T>.StrategyId`, incluindo modo, pesos e estágios
+aninhados) e são rejeitados com `InvalidDataException` antes de qualquer estado
+ser materializado se retomados com uma estratégia diferente.

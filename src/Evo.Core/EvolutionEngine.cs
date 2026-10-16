@@ -40,7 +40,21 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
 
     private readonly Action<EvolutionProgress>? _progress;
     private readonly Action<EvolutionState<T>>? _checkpoint;
+    private readonly IVariationOperator<T>? _variation;
     private readonly Func<TimeSpan>? _clock;
+
+    /// <summary>
+    /// Identidade canônica da estratégia de variação injetada: para <see cref="StandardVariationOperator{T}"/>
+    /// e <see cref="CompositeVariationOperator{T}"/> inclui seletor, modo, pesos e estágios (aninhados);
+    /// para outras implementações usa <c>Type.FullName</c>. É <c>null</c> quando o engine usa o caminho legado.
+    /// </summary>
+    public string? VariationStrategyId => _variation switch
+    {
+        null => null,
+        CompositeVariationOperator<T> composite => composite.StrategyId,
+        StandardVariationOperator<T> standard => standard.StrategyId,
+        _ => _variation.GetType().FullName,
+    };
 
     /// <summary>
     /// Cria o engine. <paramref name="progress"/> recebe um relatório por geração completa;
@@ -49,6 +63,15 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
     public EvolutionEngine(Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
         : this(progress, checkpoint, null)
     {
+    }
+
+    /// <summary>
+    /// Cria o engine com variação injetada. Sem seleção explícita, o overload legado (torneio padrão) não é alterado.
+    /// </summary>
+    public EvolutionEngine(IVariationOperator<T> variation, Action<EvolutionProgress>? progress = null, Action<EvolutionState<T>>? checkpoint = null)
+        : this(progress, checkpoint, null)
+    {
+        _variation = variation ?? throw new ArgumentNullException(nameof(variation));
     }
 
     /// <summary>Construtor de teste: <paramref name="clock"/> substitui o relógio de parede do segmento atual.</summary>
@@ -168,10 +191,18 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
                     next[e] = population[elites[e]].Clone(values);
                 }
 
+                var variation = _variation;
+                var variationContext = variation is null
+                    ? null
+                    : new VariationContext<T>(population, fitness, options, cancellationToken);
                 for (var i = options.EliteCount; i < n; i++)
                 {
                     var rng = RandomStream.Create(options.Seed, (ulong)(generation + 1), (ulong)i, BreedStreamId);
-                    next[i] = operators.Breed(population, fitness, options, ref rng);
+                    next[i] = variation is null || variationContext is null
+                        ? operators.Breed(population, fitness, options, ref rng)
+                        : variation is CompositeVariationOperator<T> composite
+                            ? composite.CreatePositionOffspring(variationContext, i - options.EliteCount, n - options.EliteCount, ref rng)
+                            : variation.CreateOffspring(variationContext, ref rng);
                 }
 
                 digest = Evaluate(problem, next, nextFitness, fitnessEvaluators, genomeEvaluators, cache, cacheLimit, cancellationToken);
