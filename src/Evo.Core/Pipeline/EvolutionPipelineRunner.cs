@@ -41,6 +41,36 @@ public sealed class EvolutionPipelineRunner<T>
     }
 
     /// <summary>
+    /// Inicia uma execução comum do pipeline a partir de uma população inicial explícita e não avaliada
+    /// (por exemplo, a saída de um particionamento de população). A população entra pelo caminho normal do
+    /// engine: geração lógica, lineage e tempo ativo começam em zero; nenhum estado de avaliador é compartilhado
+    /// com a origem da população. Fitness/digest são recomputados pelo engine antes da primeira fronteira.
+    /// </summary>
+    public EvolutionPipelineResult<T> RunFromInitialPopulation(
+        EvolutionPipelineDefinition<T> definition,
+        string runId,
+        EvolutionState<T> initialState,
+        string? evidenceDirectory = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(initialState);
+        IdRules.Validate(runId, nameof(runId));
+        var effective = Describe(definition);
+        var store = evidenceDirectory is null ? null : new FileEvolutionEvidenceStore(evidenceDirectory);
+        store?.CreateRun(
+            new EvolutionPipelineManifest(
+                FileEvolutionEvidenceStore.ManifestSchema,
+                definition.PipelineId,
+                runId,
+                effective.Sha256,
+                DateTime.UtcNow.ToString("O")),
+            effective.Json);
+        var session = new Session(definition.PipelineId, runId, store, 0, 0);
+        return Drive(definition, session, definition.InitialStateId, initialState, false, 0, cancellationToken);
+    }
+
+    /// <summary>
     /// Retoma uma evidência existente. Valida manifesto, identidade efetiva e checkpoint do último evento antes de continuar.
     /// Um pipeline cujo último evento é <c>Stop</c> já está concluído e é recusado.
     /// </summary>
