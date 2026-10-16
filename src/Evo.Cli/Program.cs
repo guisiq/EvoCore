@@ -46,6 +46,8 @@ public static class Program
                 ("example", "run") => RunExampleRun(args[2..]),
                 ("benchmark", "list") => RunExampleList(),
                 ("benchmark", "run") => RunExampleRun(args[2..]),
+                ("pipeline", "list") => PipelineCommands.List(),
+                ("pipeline", "run") => PipelineCommands.Run(args[2..]),
                 _ => Usage(),
             };
         }
@@ -82,6 +84,8 @@ public static class Program
         Console.WriteLine("  example run <id> [--out DIR]");
         Console.WriteLine("  benchmark list");
         Console.WriteLine("  benchmark run <id> [--out DIR]");
+        Console.WriteLine("  pipeline list");
+        Console.WriteLine("  pipeline run <definicao.json> [--run-id ID] [--out DIR]");
         Console.WriteLine($"Contrato RNG: {RandomStream.Version}");
     }
 

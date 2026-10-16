@@ -85,6 +85,41 @@ public sealed class BenchmarkScenarioTests
     }
 
     [Fact]
+    public void CliPipelineRunExecutesDynamicDefinitionAndWritesResult()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "evo-pipeline-test-" + Guid.NewGuid().ToString("N"));
+        var definitionPath = Path.Combine(Path.GetTempPath(), "evo-pipeline-def-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(definitionPath, """
+        {
+          "schema": "evo-pipeline/v1",
+          "pipelineId": "cli-smoke-pipeline",
+          "initialState": "stage-a",
+          "states": [
+            { "stateId": "stage-a", "problem": "symbolic-regression", "options": { "populationSize": 8, "maxGenerations": 2, "seed": 1 } }
+          ]
+        }
+        """);
+        try
+        {
+            Assert.Equal(0, Program.Main(["pipeline", "list"]));
+            Assert.Equal(0, Program.Main(["pipeline", "run", definitionPath, "--run-id", "smoke-1", "--out", dir]));
+            Assert.True(File.Exists(Path.Combine(dir, "pipeline-result.json")));
+        }
+        finally
+        {
+            if (File.Exists(definitionPath))
+            {
+                File.Delete(definitionPath);
+            }
+
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void DatasetCatalogLoadsRegisteredDatasetsWithinShape()
     {
         var boston = DatasetCatalog.Load("boston-housing", 50);
