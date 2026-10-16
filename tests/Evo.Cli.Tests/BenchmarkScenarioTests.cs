@@ -45,6 +45,20 @@ public sealed class BenchmarkScenarioTests
         Assert.True(result.GatesPassed, result.Summary);
     }
 
+    [Theory]
+    [InlineData("dag-chain-benchmark")]
+    [InlineData("dag-fanout-benchmark")]
+    [InlineData("dag-diamond-benchmark")]
+    [InlineData("dag-levels-diamond-benchmark")]
+    [InlineData("ilgpu-benchmark")]
+    public void MigratedBenchmarksWorkloadsPassGates(string id)
+    {
+        var scenario = BenchmarkScenarioRegistry.Resolve(id);
+        var result = scenario.Run(CancellationToken.None);
+        Assert.True(result.GatesPassed, result.Summary);
+        Assert.Equal(id, result.ScenarioId);
+    }
+
     [Fact]
     public void CliExampleListPrintsAllRegisteredIds()
     {

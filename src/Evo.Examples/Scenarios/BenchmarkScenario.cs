@@ -52,6 +52,11 @@ public static class BenchmarkScenarioRegistry
             new ParameterizedOperatorParityScenario(),
             new DeepChainParityScenario(),
             new BalancedParameterParityScenario(),
+            new ChainDagBenchmarkScenario(),
+            new FanOutDagBenchmarkScenario(),
+            new DiamondDagBenchmarkScenario(),
+            new LevelsDiamondDagBenchmarkScenario(),
+            new IlgpuDagBenchmarkScenario(),
         };
 
         var map = new Dictionary<string, IBenchmarkScenario>(StringComparer.Ordinal);
