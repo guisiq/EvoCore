@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Evo.ExternalConsumer</RootNamespace>
+    <AssemblyName>Evo.ExternalConsumer</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Evo.Core\Evo.Core.csproj" />
+  </ItemGroup>
+
+</Project>

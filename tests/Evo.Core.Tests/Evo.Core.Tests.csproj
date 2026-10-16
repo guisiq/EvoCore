@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Evo.Core\Evo.Core.csproj" />
+    <ProjectReference Include="..\Evo.ExternalConsumer\Evo.ExternalConsumer.csproj" />
   </ItemGroup>
 
 </Project>

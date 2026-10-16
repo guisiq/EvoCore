@@ -100,7 +100,31 @@ public sealed class EvolutionOperators<T>
         EvolutionOptions options,
         ref RandomStream random)
     {
-        var a = population[Tournament(fitness, options.TournamentSize, ref random)];
+        return BreedWith(
+            new TournamentParentSelector<T>(options.TournamentSize),
+            population,
+            fitness,
+            options,
+            ref random);
+    }
+
+    /// <summary>
+    /// Mesma sequência de <see cref="Breed"/>, com a seleção de pais delegada a <paramref name="selector"/>.
+    /// Índices fora da população são rejeitados antes de qualquer descendente ser construído.
+    /// </summary>
+    public Genome<T> BreedWith(
+        IParentSelector<T> selector,
+        IReadOnlyList<Genome<T>> population,
+        IReadOnlyList<FitnessResult> fitness,
+        EvolutionOptions options,
+        ref RandomStream random,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(options);
+        var context = new ParentSelectionContext<T>(population, fitness, cancellationToken);
+
+        var a = population[SelectValidIndex(selector, context, ref random)];
         var functionGenes = a.FunctionGenes.ToArray();
         var connectionGenes = a.ConnectionGenes.ToArray();
         var parameterGenes = a.ParameterGenes.ToArray();
@@ -108,7 +132,7 @@ public sealed class EvolutionOperators<T>
 
         if (random.NextBernoulli(options.CrossoverRate))
         {
-            var b = population[Tournament(fitness, options.TournamentSize, ref random)];
+            var b = population[SelectValidIndex(selector, context, ref random)];
             Crossover(b, options.UniformCrossoverGeneProbability, ref random, functionGenes, connectionGenes, parameterGenes, outputGenes);
         }
 
@@ -116,20 +140,17 @@ public sealed class EvolutionOperators<T>
         return Build(functionGenes, connectionGenes, parameterGenes, outputGenes);
     }
 
-    private int Tournament(FitnessResult[] fitness, int size, ref RandomStream random)
+    private static int SelectValidIndex(IParentSelector<T> selector, ParentSelectionContext<T> context, ref RandomStream random)
     {
-        var best = random.NextInt(0, fitness.Length);
-        for (var i = 1; i < size; i++)
+        context.CancellationToken.ThrowIfCancellationRequested();
+        var index = selector.SelectParentIndex(context, ref random);
+        if ((uint)index >= (uint)context.Count)
         {
-            var candidate = random.NextInt(0, fitness.Length);
-            var cmp = CompareFitness(fitness[candidate], fitness[best]);
-            if (cmp > 0 || (cmp == 0 && candidate < best))
-            {
-                best = candidate;
-            }
+            throw new InvalidOperationException(
+                $"Parent selector returned index {index}, outside the population of size {context.Count}.");
         }
 
-        return best;
+        return index;
     }
 
     private void Crossover(

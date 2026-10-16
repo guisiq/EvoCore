@@ -95,6 +95,12 @@
       },
       "evo.core": {
         "type": "Project"
+      },
+      "evo.externalconsumer": {
+        "type": "Project",
+        "dependencies": {
+          "Evo.Core": "[1.0.0, )"
+        }
       }
     }
   }
