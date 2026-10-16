@@ -111,11 +111,20 @@ public sealed class CheckpointPersistenceTests
             // Identidade divergente é rejeitada antes de qualquer estado ser materializado.
             Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.B"));
 
-            // Identidade igual, ou lado ausente (null), é compatível.
+            // Customizada versus padrão (ausência) também é rejeitada: a identidade é canônica, não aditiva.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(path, problem, options));
+
+            // Identidade igual é compatível.
             var loaded = CheckpointFile.Load(path, problem, options, variationStrategyId: "Strategy.A");
             Assert.Equal(captured!.Generation, loaded.Generation);
-            var loadedLegacy = CheckpointFile.Load(path, problem, options);
-            Assert.Equal(captured.Generation, loadedLegacy.Generation);
+
+            var defaultPath = Path.Combine(dir, "checkpoint-default.json");
+            CheckpointFile.Save(defaultPath, problem, options, captured!);
+            // Ambos ausentes (caminho padrão nos dois lados) é compatível.
+            var loadedDefault = CheckpointFile.Load(defaultPath, problem, options);
+            Assert.Equal(captured.Generation, loadedDefault.Generation);
+            // Padrão versus customizado também é rejeitado.
+            Assert.Throws<InvalidDataException>(() => CheckpointFile.Load(defaultPath, problem, options, variationStrategyId: "Strategy.A"));
         }
         finally
         {

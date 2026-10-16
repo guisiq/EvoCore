@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace Evo.Core;
 
 /// <summary>Modo de composição de operadores de variação.</summary>
@@ -76,6 +78,28 @@ public sealed class CompositeVariationOperator<T> : IVariationOperator<T>
 
     /// <summary>Modo de composição.</summary>
     public CompositionMode Mode { get; }
+
+    /// <summary>
+    /// Identidade canônica da composição: modo, pesos (quando particionada) e identidade recursiva de
+    /// cada estágio (aninhamento incluído). Dois compostos com a mesma identidade produzem o mesmo
+    /// grafo de variação para fins de checkpoint.
+    /// </summary>
+    public string StrategyId
+    {
+        get
+        {
+            var stageIds = string.Join(",", _stages.Select(DescribeStage));
+            var weights = _weights is null ? string.Empty : string.Join(";", _weights.Select(w => w.ToString("r")));
+            return $"Composite[mode={Mode},weights=({weights}),stages=({stageIds})]";
+        }
+    }
+
+    private static string DescribeStage(IVariationOperator<T> stage) => stage switch
+    {
+        CompositeVariationOperator<T> composite => composite.StrategyId,
+        StandardVariationOperator<T> standard => standard.StrategyId,
+        _ => stage.GetType().FullName ?? stage.GetType().Name,
+    };
 
     /// <inheritdoc />
     public Genome<T> CreateOffspring(VariationContext<T> context, ref RandomStream random) =>

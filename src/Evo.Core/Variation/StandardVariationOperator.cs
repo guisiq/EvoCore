@@ -19,6 +19,12 @@ public sealed class StandardVariationOperator<T> : IVariationOperator<T>
         _selector = selector;
     }
 
+    /// <summary>
+    /// Identidade canônica da estratégia: nome do tipo acrescido do seletor configurado (ou o
+    /// torneio padrão do engine quando nenhum seletor explícito foi informado).
+    /// </summary>
+    public string StrategyId => $"Standard[selector={_selector?.GetType().FullName ?? "default-tournament"}]";
+
     /// <inheritdoc />
     public Genome<T> CreateOffspring(VariationContext<T> context, ref RandomStream random)
     {

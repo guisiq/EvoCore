@@ -44,10 +44,17 @@ public sealed class EvolutionEngine<T> : IEvolutionEngine<T>
     private readonly Func<TimeSpan>? _clock;
 
     /// <summary>
-    /// Identidade estável da estratégia de variação injetada (<c>Type.FullName</c>), ou <c>null</c> quando o
-    /// engine usa o caminho legado. Usada para gravar/validar a identidade aditiva no checkpoint.
+    /// Identidade canônica da estratégia de variação injetada: para <see cref="StandardVariationOperator{T}"/>
+    /// e <see cref="CompositeVariationOperator{T}"/> inclui seletor, modo, pesos e estágios (aninhados);
+    /// para outras implementações usa <c>Type.FullName</c>. É <c>null</c> quando o engine usa o caminho legado.
     /// </summary>
-    public string? VariationStrategyId => _variation?.GetType().FullName;
+    public string? VariationStrategyId => _variation switch
+    {
+        null => null,
+        CompositeVariationOperator<T> composite => composite.StrategyId,
+        StandardVariationOperator<T> standard => standard.StrategyId,
+        _ => _variation.GetType().FullName,
+    };
 
     /// <summary>
     /// Cria o engine. <paramref name="progress"/> recebe um relatório por geração completa;

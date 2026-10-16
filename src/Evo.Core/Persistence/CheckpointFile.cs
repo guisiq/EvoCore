@@ -103,10 +103,10 @@ public static class CheckpointFile
         }
 
         ValidateHeader(dto, problem, options);
-        // A identidade de estratégia é aditiva: ausência em qualquer lado (null) não gera rejeição,
-        // preservando leitura de checkpoints legados e do caminho legado do engine. Divergência explícita
-        // entre identidades não-nulas é rejeitada antes de qualquer estado ser materializado.
-        if (dto.VariationStrategyId is not null && variationStrategyId is not null &&
+        // A identidade de estratégia é canônica a partir do schema v2: ambos os lados (inclusive null,
+        // que significa caminho legado/padrão) precisam coincidir exatamente. Checkpoints legados
+        // (schema v1) não carregam a informação e são sempre compatíveis, preservando leitura antiga.
+        if (dto.SchemaVersion == SchemaVersion &&
             !string.Equals(dto.VariationStrategyId, variationStrategyId, StringComparison.Ordinal))
         {
             throw GenomeJson.Invalid("identidade de operador de variação compatível com o checkpoint");
