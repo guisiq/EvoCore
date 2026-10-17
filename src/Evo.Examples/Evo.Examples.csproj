@@ -7,6 +7,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Evo.Core\Evo.Core.csproj" />
+    <ProjectReference Include="..\Evo.Ilgpu\Evo.Ilgpu.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Data\Benchmarks\**" CopyToOutputDirectory="PreserveNewest">
+      <Link>Data\Benchmarks\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
   </ItemGroup>
 
 </Project>

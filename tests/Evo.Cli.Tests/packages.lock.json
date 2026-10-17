@@ -96,11 +96,32 @@
       "evo.cli": {
         "type": "Project",
         "dependencies": {
-          "Evo.Core": "[1.0.0, )"
+          "Evo.Core": "[1.0.0, )",
+          "Evo.Examples": "[1.0.0, )"
         }
       },
       "evo.core": {
         "type": "Project"
+      },
+      "evo.examples": {
+        "type": "Project",
+        "dependencies": {
+          "Evo.Core": "[1.0.0, )",
+          "Evo.Ilgpu": "[1.0.0, )"
+        }
+      },
+      "evo.ilgpu": {
+        "type": "Project",
+        "dependencies": {
+          "Evo.Core": "[1.0.0, )",
+          "ILGPU": "[1.2.0, )"
+        }
+      },
+      "ILGPU": {
+        "type": "CentralTransitive",
+        "requested": "[1.2.0, )",
+        "resolved": "1.2.0",
+        "contentHash": "/iHB9lp2yBq0yWiIEV2Fam3Mcjlqxl9lGi5tZOr8f1fHl6IpaHjDgH1osU1gGStifPZNmH9TKqiuLYSAdeNO4g=="
       }
     }
   }
